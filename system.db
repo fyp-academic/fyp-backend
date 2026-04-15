@@ -1,0 +1,1952 @@
+-- =============================================================================
+--  EduAI LMS — Complete Database Schema
+--  system.db  |  PostgreSQL / Supabase dialect
+--  Generated from: json.md
+--  Tables: 30  |  Engine: L0 → L1 → L2 → L3 → RE → IE → FL Pipeline
+-- =============================================================================
+--
+--  EXECUTION ORDER (respects foreign key dependencies):
+--    1.  users
+--    2.  categories
+--    3.  courses
+--    4.  sections
+--    5.  activities
+--    6.  enrollments
+--    7.  grade_items
+--    8.  student_grades
+--    9.  notifications
+--    10. conversations
+--    11. messages
+--    12. quiz_questions
+--    13. quiz_answers
+--    14. ai_performance_snapshots
+--    15. ai_skill_metrics
+--    16. ai_at_risk_students
+--    17. ai_recommendations
+--    18. ai_content_recommendations
+--    19. ai_generated_questions
+--    20. user_preferences
+--    21. activity_performance
+--    22. dashboard_engagement
+--    23. learner_profiles          (L0)
+--    24. behavioral_signals        (L1)
+--    25. cognitive_signals         (L2)
+--    26. emotional_signals         (L3)
+--    27. risk_scores               (RE)
+--    28. interventions             (IE)
+--    29. feedback_evaluations      (FL)
+--    30. profile_drift_logs        (FL)
+--
+-- =============================================================================
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- EXTENSIONS
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";   -- for gen_random_uuid()
+CREATE EXTENSION IF NOT EXISTS "pg_trgm";    -- for full-text/search indexes
+
+-- =============================================================================
+--  TABLE 1: users
+--  All platform users: admins, instructors, and students.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS users (
+    id                  TEXT            PRIMARY KEY,
+    name                TEXT            NOT NULL,
+    email               TEXT            NOT NULL UNIQUE,
+    role                TEXT            NOT NULL
+                                        CHECK (role IN ('admin', 'instructor', 'student')),
+    initials            TEXT,                          -- derived display field (e.g. "SJ")
+    department          TEXT,
+    institution         TEXT,
+    country             TEXT,
+    timezone            TEXT,                          -- IANA tz string e.g. "America/New_York"
+    language            TEXT            DEFAULT 'English',
+    bio                 TEXT,
+    join_date           DATE,
+    last_access         TEXT,                          -- human-readable string or ISO timestamp
+    enrolled_courses    INTEGER         DEFAULT 0,
+    created_at          TIMESTAMPTZ     DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ     DEFAULT NOW()
+);
+
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_users_role  ON users (role);
+CREATE INDEX IF NOT EXISTS idx_users_email ON users USING gin (email gin_trgm_ops);
+
+-- =============================================================================
+--  TABLE 2: categories
+--  Hierarchical course categories (self-referential parent).
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS categories (
+    id              TEXT            PRIMARY KEY,
+    name            TEXT            NOT NULL,
+    description     TEXT,
+    parent_id       TEXT            REFERENCES categories (id) ON DELETE SET NULL,
+    id_number       TEXT            UNIQUE,            -- institutional identifier e.g. "CS-WEB"
+    course_count    INTEGER         DEFAULT 0,
+    child_count     INTEGER         DEFAULT 0,
+    created_at      TIMESTAMPTZ     DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ     DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_categories_parent ON categories (parent_id);
+
+-- =============================================================================
+--  TABLE 3: courses
+--  The central entity. Belongs to a category, owned by an instructor.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS courses (
+    id                  TEXT        PRIMARY KEY,
+    name                TEXT        NOT NULL,
+    short_name          TEXT        NOT NULL UNIQUE,   -- e.g. "PYTH101"
+    description         TEXT,
+    category_id         TEXT        REFERENCES categories (id) ON DELETE SET NULL,
+    category_name       TEXT,                          -- denormalised display cache
+    instructor_id       TEXT        REFERENCES users (id) ON DELETE SET NULL,
+    instructor_name     TEXT,                          -- denormalised display cache
+    enrolled_students   INTEGER     DEFAULT 0,
+    status              TEXT        NOT NULL DEFAULT 'draft'
+                                    CHECK (status IN ('active', 'draft', 'archived')),
+    visibility          TEXT        NOT NULL DEFAULT 'hidden'
+                                    CHECK (visibility IN ('shown', 'hidden')),
+    format              TEXT        NOT NULL DEFAULT 'topics'
+                                    CHECK (format IN ('topics', 'weekly', 'social')),
+    start_date          DATE,
+    end_date            DATE,
+    language            TEXT        DEFAULT 'English',
+    tags                TEXT[]      DEFAULT '{}',      -- PostgreSQL text array
+    max_students        INTEGER,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_courses_category   ON courses (category_id);
+CREATE INDEX IF NOT EXISTS idx_courses_instructor ON courses (instructor_id);
+CREATE INDEX IF NOT EXISTS idx_courses_status     ON courses (status);
+
+-- =============================================================================
+--  TABLE 4: sections
+--  Course content is grouped into sections (weeks / topics / units).
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS sections (
+    id          TEXT        PRIMARY KEY,
+    course_id   TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    title       TEXT        NOT NULL,
+    summary     TEXT,
+    sort_order  INTEGER     NOT NULL DEFAULT 0,
+    visible     BOOLEAN     NOT NULL DEFAULT TRUE,
+    collapsed   BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at  TIMESTAMPTZ DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sections_course ON sections (course_id, sort_order);
+
+-- =============================================================================
+--  TABLE 5: activities
+--  Individual learning items inside a section.
+--  10 supported types: quiz, assignment, forum, url, file,
+--                      h5p, scorm, workshop, label, page
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS activities (
+    id                  TEXT        PRIMARY KEY,
+    section_id          TEXT        NOT NULL REFERENCES sections (id) ON DELETE CASCADE,
+    course_id           TEXT        NOT NULL REFERENCES courses  (id) ON DELETE CASCADE,
+    type                TEXT        NOT NULL
+                                    CHECK (type IN (
+                                        'quiz', 'assignment', 'forum', 'url', 'file',
+                                        'h5p', 'scorm', 'workshop', 'label', 'page'
+                                    )),
+    name                TEXT        NOT NULL,
+    description         TEXT,
+    due_date            DATE,
+    visible             BOOLEAN     NOT NULL DEFAULT TRUE,
+    completion_status   TEXT        DEFAULT 'none'
+                                    CHECK (completion_status IN ('completed', 'incomplete', 'none')),
+    grade_max           NUMERIC(7,2),
+    sort_order          INTEGER     NOT NULL DEFAULT 0,
+    settings            JSONB       DEFAULT '{}',      -- flexible per-type config
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_activities_section ON activities (section_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_activities_course  ON activities (course_id);
+CREATE INDEX IF NOT EXISTS idx_activities_type    ON activities (type);
+
+-- =============================================================================
+--  TABLE 6: enrollments  (previously "participants")
+--  Junction between users and courses; holds role, progress, groups.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS enrollments (
+    id              TEXT        PRIMARY KEY,
+    user_id         TEXT        NOT NULL REFERENCES users   (id) ON DELETE CASCADE,
+    course_id       TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    role            TEXT        NOT NULL DEFAULT 'student'
+                                CHECK (role IN (
+                                    'student', 'instructor', 'teaching_assistant', 'observer'
+                                )),
+    enrolled_date   DATE        NOT NULL DEFAULT CURRENT_DATE,
+    last_access     TEXT,                              -- human-readable or ISO
+    progress        NUMERIC(5,2) DEFAULT 0             -- 0–100 percentage
+                                CHECK (progress >= 0 AND progress <= 100),
+    groups          TEXT[]      DEFAULT '{}',
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (user_id, course_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_enrollments_user   ON enrollments (user_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_course ON enrollments (course_id);
+CREATE INDEX IF NOT EXISTS idx_enrollments_role   ON enrollments (role);
+
+-- =============================================================================
+--  TABLE 7: grade_items
+--  Gradeable activity definitions for a course's gradebook.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS grade_items (
+    id              TEXT        PRIMARY KEY,
+    course_id       TEXT        NOT NULL REFERENCES courses    (id) ON DELETE CASCADE,
+    activity_id     TEXT        REFERENCES activities (id) ON DELETE SET NULL,
+    activity_name   TEXT        NOT NULL,
+    activity_type   TEXT        NOT NULL
+                                CHECK (activity_type IN (
+                                    'quiz', 'assignment', 'forum', 'url', 'file',
+                                    'h5p', 'scorm', 'workshop', 'label', 'page'
+                                )),
+    grade_max       NUMERIC(7,2) NOT NULL DEFAULT 100,
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_grade_items_course   ON grade_items (course_id);
+CREATE INDEX IF NOT EXISTS idx_grade_items_activity ON grade_items (activity_id);
+
+-- =============================================================================
+--  TABLE 8: student_grades
+--  Individual student submission/grade records per grade item.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS student_grades (
+    id              TEXT            PRIMARY KEY,
+    grade_item_id   TEXT            NOT NULL REFERENCES grade_items (id) ON DELETE CASCADE,
+    student_id      TEXT            NOT NULL REFERENCES users      (id) ON DELETE CASCADE,
+    student_name    TEXT            NOT NULL,          -- denormalised for quick display
+    grade           NUMERIC(7,2),                      -- NULL = not submitted
+    percentage      NUMERIC(5,2),                      -- NULL = not submitted
+    feedback        TEXT,
+    submitted_date  DATE,
+    status          TEXT            NOT NULL DEFAULT 'not_submitted'
+                                    CHECK (status IN (
+                                        'graded', 'submitted', 'not_submitted', 'late'
+                                    )),
+    created_at      TIMESTAMPTZ     DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ     DEFAULT NOW(),
+    UNIQUE (grade_item_id, student_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_student_grades_item    ON student_grades (grade_item_id);
+CREATE INDEX IF NOT EXISTS idx_student_grades_student ON student_grades (student_id);
+CREATE INDEX IF NOT EXISTS idx_student_grades_status  ON student_grades (status);
+
+-- =============================================================================
+--  TABLE 9: notifications
+--  System and activity-driven notifications delivered to a user.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS notifications (
+    id          TEXT        PRIMARY KEY,
+    user_id     TEXT        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    title       TEXT        NOT NULL,
+    message     TEXT        NOT NULL,
+    timestamp   TEXT        NOT NULL,                  -- human-readable relative string
+    read        BOOLEAN     NOT NULL DEFAULT FALSE,
+    type        TEXT        NOT NULL DEFAULT 'info'
+                            CHECK (type IN ('info', 'warning', 'success', 'danger')),
+    created_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id, read);
+
+-- =============================================================================
+--  TABLE 10: conversations
+--  One-to-one messaging threads between two users.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS conversations (
+    id                      TEXT        PRIMARY KEY,
+    owner_user_id           TEXT        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    participant_user_id     TEXT        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    participant_name        TEXT        NOT NULL,       -- denormalised display cache
+    participant_role        TEXT        NOT NULL,       -- display label e.g. "Student"
+    last_message            TEXT,
+    last_message_time       TEXT,                      -- human-readable or ISO
+    unread_count            INTEGER     NOT NULL DEFAULT 0,
+    course_id               TEXT        REFERENCES courses (id) ON DELETE SET NULL,
+    created_at              TIMESTAMPTZ DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (owner_user_id, participant_user_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversations_owner       ON conversations (owner_user_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_participant ON conversations (participant_user_id);
+
+-- =============================================================================
+--  TABLE 11: messages
+--  Individual messages inside a conversation thread.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS messages (
+    id              TEXT        PRIMARY KEY,
+    conversation_id TEXT        NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+    sender_id       TEXT        NOT NULL REFERENCES users         (id) ON DELETE CASCADE,
+    sender_name     TEXT        NOT NULL,              -- denormalised display cache
+    content         TEXT        NOT NULL,
+    timestamp       TEXT        NOT NULL,              -- human-readable or ISO
+    read            BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages (conversation_id);
+CREATE INDEX IF NOT EXISTS idx_messages_sender       ON messages (sender_id);
+
+-- =============================================================================
+--  TABLE 12: quiz_questions
+--  Question bank entries linked to quiz activities.
+--  8 question types: multiple_choice, true_false, matching, short_answer,
+--                    numerical, essay, calculated, drag_drop
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS quiz_questions (
+    id                  TEXT        PRIMARY KEY,
+    activity_id         TEXT        REFERENCES activities (id) ON DELETE SET NULL,
+    course_id           TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    type                TEXT        NOT NULL
+                                    CHECK (type IN (
+                                        'multiple_choice', 'true_false', 'matching',
+                                        'short_answer', 'numerical', 'essay',
+                                        'calculated', 'drag_drop'
+                                    )),
+    question_text       TEXT        NOT NULL,
+    category            TEXT,                          -- topic/chapter tag
+    default_mark        NUMERIC(6,2) NOT NULL DEFAULT 1,
+    shuffle_answers     BOOLEAN     DEFAULT FALSE,
+    multiple_answers    BOOLEAN     DEFAULT FALSE,
+    correct_answer      TEXT,                          -- for true_false / short_answer / numerical
+    penalty             NUMERIC(4,3) DEFAULT 0,        -- fraction deducted per wrong attempt
+    hints               TEXT[]      DEFAULT '{}',
+    matching_pairs      JSONB       DEFAULT '[]',      -- [{question, answer}] for matching type
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_activity ON quiz_questions (activity_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_course   ON quiz_questions (course_id);
+CREATE INDEX IF NOT EXISTS idx_quiz_questions_type     ON quiz_questions (type);
+
+-- =============================================================================
+--  TABLE 13: quiz_answers
+--  Answer options for multiple-choice / matching questions.
+--  grade_fraction: 1.0 = correct, 0 = wrong, negative = penalty
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS quiz_answers (
+    id              TEXT            PRIMARY KEY,
+    question_id     TEXT            NOT NULL REFERENCES quiz_questions (id) ON DELETE CASCADE,
+    text            TEXT            NOT NULL,
+    grade_fraction  NUMERIC(5,4)    NOT NULL DEFAULT 0
+                                    CHECK (grade_fraction >= -1 AND grade_fraction <= 1),
+    feedback        TEXT,
+    sort_order      INTEGER         NOT NULL DEFAULT 0,
+    created_at      TIMESTAMPTZ     DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_quiz_answers_question ON quiz_answers (question_id);
+
+-- =============================================================================
+--  TABLE 14: ai_performance_snapshots
+--  Weekly course-level KPI snapshots used to render the Weekly Trends chart
+--  on AI Insights → Performance Analysis.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS ai_performance_snapshots (
+    id                  TEXT        PRIMARY KEY,
+    course_id           TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    week_label          TEXT        NOT NULL,          -- e.g. "W1", "W7"
+    avg_grade           NUMERIC(5,2),                  -- 0–100
+    completion_rate     NUMERIC(5,2),                  -- 0–100
+    engagement_score    NUMERIC(5,2),                  -- 0–100
+    recorded_at         DATE        NOT NULL,
+    created_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_perf_course ON ai_performance_snapshots (course_id, recorded_at);
+
+-- =============================================================================
+--  TABLE 15: ai_skill_metrics
+--  Radar chart data per course — one row per skill dimension per snapshot date.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS ai_skill_metrics (
+    id              TEXT        PRIMARY KEY,
+    course_id       TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    skill_label     TEXT        NOT NULL,              -- e.g. "Quiz Performance"
+    score           NUMERIC(5,2) NOT NULL,             -- 0–100
+    full_mark       NUMERIC(5,2) NOT NULL DEFAULT 100,
+    recorded_at     DATE        NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_skill_course ON ai_skill_metrics (course_id, recorded_at);
+
+-- =============================================================================
+--  TABLE 16: ai_at_risk_students
+--  GPT-generated at-risk student records (legacy/simplified risk view).
+--  For full pipeline detail see risk_scores (RE) + behavioral/cognitive/emotional signals.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS ai_at_risk_students (
+    id                  TEXT        PRIMARY KEY,
+    course_id           TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    student_id          TEXT        NOT NULL REFERENCES users   (id) ON DELETE CASCADE,
+    student_name        TEXT        NOT NULL,
+    progress            NUMERIC(5,2),
+    last_access         TEXT,
+    missed_activities   INTEGER     DEFAULT 0,
+    grade               NUMERIC(5,2),
+    risk_level          TEXT        NOT NULL DEFAULT 'medium'
+                                    CHECK (risk_level IN ('high', 'medium', 'low')),
+    ai_recommendation   TEXT,
+    detected_at         DATE        NOT NULL DEFAULT CURRENT_DATE,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_risk_course    ON ai_at_risk_students (course_id);
+CREATE INDEX IF NOT EXISTS idx_ai_risk_student   ON ai_at_risk_students (student_id);
+CREATE INDEX IF NOT EXISTS idx_ai_risk_level     ON ai_at_risk_students (risk_level);
+
+-- =============================================================================
+--  TABLE 17: ai_recommendations
+--  Pedagogical suggestions generated by GPT for the AI Suggestions tab.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS ai_recommendations (
+    id              TEXT        PRIMARY KEY,
+    course_id       TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    title           TEXT        NOT NULL,
+    description     TEXT        NOT NULL,
+    impact_level    TEXT        NOT NULL DEFAULT 'medium'
+                                CHECK (impact_level IN ('high', 'medium', 'urgent', 'low')),
+    icon_name       TEXT,                              -- Lucide icon identifier e.g. "Zap"
+    color_scheme    TEXT,                              -- e.g. "purple", "amber", "blue", "red"
+    generated_at    DATE        NOT NULL DEFAULT CURRENT_DATE,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_recommendations_course ON ai_recommendations (course_id);
+
+-- =============================================================================
+--  TABLE 18: ai_content_recommendations
+--  External/internal resource links surfaced by GPT based on performance gaps.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS ai_content_recommendations (
+    id              TEXT        PRIMARY KEY,
+    course_id       TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    title           TEXT        NOT NULL,
+    content_type    TEXT        NOT NULL
+                                CHECK (content_type IN (
+                                    'Video', 'Article', 'Interactive',
+                                    'Quiz Bank', 'Document'
+                                )),
+    relevance_score NUMERIC(5,2) NOT NULL               -- 0–100
+                                CHECK (relevance_score >= 0 AND relevance_score <= 100),
+    source          TEXT,                              -- e.g. "YouTube", "Real Python", "Internal"
+    url             TEXT,
+    generated_at    DATE        NOT NULL DEFAULT CURRENT_DATE,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_content_course ON ai_content_recommendations (course_id);
+
+-- =============================================================================
+--  TABLE 19: ai_generated_questions
+--  Questions produced by the GPT question generator (AI Insights → Generate tab).
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS ai_generated_questions (
+    id              TEXT        PRIMARY KEY,
+    course_id       TEXT        NOT NULL REFERENCES courses    (id) ON DELETE CASCADE,
+    activity_id     TEXT        REFERENCES activities (id) ON DELETE SET NULL,
+    topic           TEXT        NOT NULL,              -- e.g. "Object-Oriented Programming"
+    question_text   TEXT        NOT NULL,
+    question_type   TEXT        NOT NULL
+                                CHECK (question_type IN (
+                                    'Essay', 'Multiple Choice', 'True/False',
+                                    'Short Answer', 'Matching', 'Numerical'
+                                )),
+    difficulty      TEXT        NOT NULL DEFAULT 'Medium'
+                                CHECK (difficulty IN ('Easy', 'Medium', 'Hard')),
+    status          TEXT        NOT NULL DEFAULT 'generated'
+                                CHECK (status IN (
+                                    'generated', 'added_to_bank', 'dismissed'
+                                )),
+    generated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_ai_genq_course  ON ai_generated_questions (course_id);
+CREATE INDEX IF NOT EXISTS idx_ai_genq_status  ON ai_generated_questions (status);
+
+-- =============================================================================
+--  TABLE 20: user_preferences
+--  Per-user toggle settings (Profile → Preferences panel).
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS user_preferences (
+    id                  TEXT        PRIMARY KEY,
+    user_id             TEXT        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    preference_key      TEXT        NOT NULL,          -- snake_case key e.g. "email_notifications"
+    preference_label    TEXT        NOT NULL,          -- display label
+    description         TEXT,
+    enabled             BOOLEAN     NOT NULL DEFAULT TRUE,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (user_id, preference_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_prefs_user ON user_preferences (user_id);
+
+-- =============================================================================
+--  TABLE 21: activity_performance
+--  Horizontal bar chart data — average score % per activity.
+--  Used on AI Insights → Performance → Activity Performance chart.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS activity_performance (
+    id                      TEXT        PRIMARY KEY,
+    course_id               TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    activity_name           TEXT        NOT NULL,
+    avg_score_percentage    NUMERIC(5,2) NOT NULL      -- 0–100
+                                        CHECK (avg_score_percentage >= 0 AND avg_score_percentage <= 100),
+    grade_max               NUMERIC(7,2),
+    recorded_at             DATE        NOT NULL DEFAULT CURRENT_DATE,
+    created_at              TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_perf_course ON activity_performance (course_id);
+
+-- =============================================================================
+--  TABLE 22: dashboard_engagement
+--  Daily engagement data for the Dashboard Weekly Engagement area chart.
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS dashboard_engagement (
+    id              TEXT        PRIMARY KEY,
+    course_id       TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    day_label       TEXT        NOT NULL,              -- "Mon", "Tue" … "Sun"
+    active_students INTEGER     NOT NULL DEFAULT 0,
+    submissions     INTEGER     NOT NULL DEFAULT 0,
+    week_of         DATE        NOT NULL,
+    created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_dashboard_engagement_course ON dashboard_engagement (course_id, week_of);
+
+-- =============================================================================
+-- =============================================================================
+--  LEARNER ANALYTICS PIPELINE  (L0 → L1 → L2 → L3 → RE → IE → FL)
+-- =============================================================================
+-- =============================================================================
+
+-- =============================================================================
+--  TABLE 23: learner_profiles  (L0 — Declared Profile)
+--
+--  Collected at onboarding. Defines which profile archetype the learner
+--  identifies with. Profile type drives signal WEIGHTS in the Risk Engine (RE).
+--
+--  Profile Types:
+--    H = Heutagogical / Self-Directed
+--        Key signals: optional_resource_access_rate, voluntary_engagement_delta
+--    A = Activist / Social Learner
+--        Key signals: forum_post_rate, peer_response_rate
+--    T = Theorist / Task-Oriented
+--        Key signals: quiz_learning_delta, submission_timing
+--    C = Conformist / Structured
+--        Key signals: content_completion_rate, feedback_uptake_lag_hours
+--
+--  Score thresholds for each type (H/A/T/C scored 0–20):
+--    Mixed profile: if top two scores are within 3 points → is_mixed_profile = TRUE
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS learner_profiles (
+    id                      TEXT        PRIMARY KEY,
+    learner_id              TEXT        NOT NULL REFERENCES users   (id) ON DELETE CASCADE,
+    course_id               TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+
+    -- Profile classification
+    primary_profile         TEXT        NOT NULL
+                                        CHECK (primary_profile IN ('H', 'A', 'T', 'C')),
+    secondary_profile       TEXT        CHECK (secondary_profile IN ('H', 'A', 'T', 'C')),
+    is_mixed_profile        BOOLEAN     NOT NULL DEFAULT FALSE,
+    mixed_blend_primary     NUMERIC(4,2) DEFAULT 1.00, -- 0.00–1.00 weighting for primary
+    mixed_blend_secondary   NUMERIC(4,2) DEFAULT 0.00, -- 0.00–1.00 weighting for secondary
+
+    -- Raw HATC profile scores (0–20 each)
+    h_score                 SMALLINT    DEFAULT 0 CHECK (h_score BETWEEN 0 AND 20),
+    a_score                 SMALLINT    DEFAULT 0 CHECK (a_score BETWEEN 0 AND 20),
+    t_score                 SMALLINT    DEFAULT 0 CHECK (t_score BETWEEN 0 AND 20),
+    c_score                 SMALLINT    DEFAULT 0 CHECK (c_score BETWEEN 0 AND 20),
+
+    -- Declared learning preferences (text array of preference tags)
+    declared_preferences    TEXT[]      DEFAULT '{}',
+
+    -- LMS feature flags (controls which LMS features are pre-enabled for learner)
+    lms_flags               JSONB       DEFAULT '{
+        "open_navigation": false,
+        "structured_pathway": false,
+        "reflection_journals": false,
+        "peer_review": false,
+        "cohort_grouping": false,
+        "self_assessment": false,
+        "deadline_reminders": false
+    }',
+
+    -- Pulse / emotional check-in consent
+    pulse_consent           BOOLEAN     NOT NULL DEFAULT FALSE,
+    pulse_consent_at        TIMESTAMPTZ,
+
+    -- Profile drift tracking (updated by FL Feedback Loop)
+    drift_flag              BOOLEAN     NOT NULL DEFAULT FALSE,
+    drift_weeks_count       INTEGER     NOT NULL DEFAULT 0,     -- consecutive weeks of drift
+    drift_flagged_at        TIMESTAMPTZ,
+
+    -- Internal note (from sample JSON _note field)
+    profile_note            TEXT,
+
+    created_at              TIMESTAMPTZ DEFAULT NOW(),
+    updated_at              TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE (learner_id, course_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_lp_learner          ON learner_profiles (learner_id);
+CREATE INDEX IF NOT EXISTS idx_lp_course           ON learner_profiles (course_id);
+CREATE INDEX IF NOT EXISTS idx_lp_primary_profile  ON learner_profiles (primary_profile);
+CREATE INDEX IF NOT EXISTS idx_lp_drift_flag       ON learner_profiles (drift_flag) WHERE drift_flag = TRUE;
+
+-- =============================================================================
+--  TABLE 24: behavioral_signals  (L1)
+--
+--  Weekly behavioral data extracted from LMS activity logs.
+--  Computed every Monday from moodle_activity_log / xAPI events.
+--
+--  Signal definitions:
+--    login_frequency           — sessions per week
+--    time_on_task_hours        — total active time (hours)
+--    content_completion_rate   — fraction of required content accessed (0–1)
+--    quiz_attempt_count        — number of quiz attempts made
+--    quiz_available_count      — number of quiz attempts available
+--    submission_timing         — early | on_time | late_1_2 | late_3_5 | missing
+--    forum_post_count          — posts made
+--    forum_posts_required      — posts required by course design
+--    navigation_pattern        — linear | nonlinear
+--
+--  normalised_values (JSONB): RE-ready 0–1 values for each signal
+--  colour_flags      (JSONB): green | amber | orange | red per signal
+--  raw_data          (JSONB): session log, resource counts, LMS source metadata
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS behavioral_signals (
+    id                      TEXT        PRIMARY KEY,
+    learner_id              TEXT        NOT NULL REFERENCES users   (id) ON DELETE CASCADE,
+    course_id               TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    week_number             SMALLINT    NOT NULL CHECK (week_number >= 1),
+
+    -- Raw behavioral metrics
+    login_frequency         SMALLINT    DEFAULT 0,
+    time_on_task_hours      NUMERIC(5,2) DEFAULT 0,
+    content_completion_rate NUMERIC(5,4) DEFAULT 0     -- 0.0000 – 1.0000
+                                         CHECK (content_completion_rate BETWEEN 0 AND 1),
+    quiz_attempt_count      SMALLINT    DEFAULT 0,
+    quiz_available_count    SMALLINT    DEFAULT 0,
+    submission_timing       TEXT        DEFAULT 'on_time'
+                                        CHECK (submission_timing IN (
+                                            'early', 'on_time', 'late_1_2',
+                                            'late_3_5', 'missing'
+                                        )),
+    forum_post_count        SMALLINT    DEFAULT 0,
+    forum_posts_required    SMALLINT    DEFAULT 0,
+    navigation_pattern      TEXT        DEFAULT 'linear'
+                                        CHECK (navigation_pattern IN ('linear', 'nonlinear')),
+
+    -- RE input data (computed from raw)
+    normalised_values       JSONB       DEFAULT '{}',
+    colour_flags            JSONB       DEFAULT '{}',
+    raw_data                JSONB       DEFAULT '{}',
+
+    computed_at             TIMESTAMPTZ,
+    created_at              TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE (learner_id, course_id, week_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bs_learner ON behavioral_signals (learner_id, course_id);
+CREATE INDEX IF NOT EXISTS idx_bs_week    ON behavioral_signals (course_id, week_number);
+
+-- =============================================================================
+--  TABLE 25: cognitive_signals  (L2)
+--
+--  Computed from xAPI LRS data — measures how the learner processes content.
+--
+--  Signal definitions:
+--    content_revisit_rate          — avg revisits per accessed resource
+--    revisit_flag                  — TRUE if any resource accessed ≥ 3 times
+--    quiz_first_attempt_score      — score on attempt 1 (0–100)
+--    quiz_final_attempt_score      — score on final attempt (0–100)
+--    quiz_learning_delta           — improvement fraction (final–first)/(100–first)
+--    discussion_depth_score        — NLP-computed quality score 0–100 (NULL if no posts)
+--    avg_post_word_count           — average words per forum post
+--    question_count                — questions asked in forum posts (NLP)
+--    assertion_count               — assertions made in forum posts (NLP)
+--    peer_response_rate            — fraction of peers responded to
+--    optional_resource_access_rate — optional resources accessed / available
+--    feedback_uptake_lag_hours     — hours between feedback received and next login
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS cognitive_signals (
+    id                              TEXT        PRIMARY KEY,
+    learner_id                      TEXT        NOT NULL REFERENCES users   (id) ON DELETE CASCADE,
+    course_id                       TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    week_number                     SMALLINT    NOT NULL CHECK (week_number >= 1),
+
+    -- Content revisit
+    content_revisit_rate            NUMERIC(5,2) DEFAULT 0,
+    revisit_flag                    BOOLEAN     NOT NULL DEFAULT FALSE,
+
+    -- Quiz learning quality
+    quiz_first_attempt_score        NUMERIC(6,2),
+    quiz_final_attempt_score        NUMERIC(6,2),
+    quiz_learning_delta             NUMERIC(6,4),      -- 0.0000 – 1.0000
+
+    -- Discussion / forum depth
+    discussion_depth_score          NUMERIC(6,2),      -- NULL if no posts this week
+    avg_post_word_count             INTEGER     DEFAULT 0,
+    question_count                  INTEGER     DEFAULT 0,
+    assertion_count                 INTEGER     DEFAULT 0,
+    peer_response_rate              NUMERIC(5,4) DEFAULT 0,
+
+    -- Self-directed engagement
+    optional_resource_access_rate   NUMERIC(5,4) DEFAULT 0,
+
+    -- Feedback responsiveness
+    feedback_uptake_lag_hours       INTEGER,           -- NULL if no feedback received
+
+    -- RE input data (computed from raw)
+    normalised_values               JSONB       DEFAULT '{}',
+    colour_flags                    JSONB       DEFAULT '{}',
+    raw_data                        JSONB       DEFAULT '{}',
+
+    computed_at                     TIMESTAMPTZ,
+    created_at                      TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE (learner_id, course_id, week_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cs_learner      ON cognitive_signals (learner_id, course_id);
+CREATE INDEX IF NOT EXISTS idx_cs_week         ON cognitive_signals (course_id, week_number);
+CREATE INDEX IF NOT EXISTS idx_cs_revisit_flag ON cognitive_signals (revisit_flag) WHERE revisit_flag = TRUE;
+
+-- =============================================================================
+--  TABLE 26: emotional_signals  (L3)
+--
+--  Self-reported pulse check-ins + computed emotional/motivational indicators.
+--
+--  Signal definitions:
+--    pulse_confidence              — self-reported confidence (1–5)
+--    pulse_energy                  — self-reported energy (1–5)
+--    pulse_composite               — weighted composite (avg of confidence + energy)
+--    mood_drift_score              — 4-week rolling weighted avg of pulse_composite
+--                                   NULL until 2+ data points exist
+--    mood_drift_flag               — TRUE if drift score dropped >20% below baseline
+--    help_seeking_rate             — (messages + forum_questions) / cohort_avg_rate
+--    voluntary_engagement_rate     — optional activities accessed / available
+--    voluntary_engagement_delta    — change from previous week (positive = improvement)
+--    badge_earned_this_week        — TRUE if any badge awarded this week
+--    badge_response_delta          — % change in login/access in 48hrs after badge
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS emotional_signals (
+    id                          TEXT        PRIMARY KEY,
+    learner_id                  TEXT        NOT NULL REFERENCES users   (id) ON DELETE CASCADE,
+    course_id                   TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    week_number                 SMALLINT    NOT NULL CHECK (week_number >= 1),
+
+    -- Pulse check-in
+    pulse_confidence            SMALLINT    CHECK (pulse_confidence BETWEEN 1 AND 5),
+    pulse_energy                SMALLINT    CHECK (pulse_energy BETWEEN 1 AND 5),
+    pulse_composite             NUMERIC(4,2),          -- avg of confidence + energy (1.0–5.0)
+    pulse_submitted             BOOLEAN     NOT NULL DEFAULT FALSE,
+    pulse_submitted_at          TIMESTAMPTZ,
+
+    -- Mood drift (rolling average, computed from pulse_composite history)
+    mood_drift_score            NUMERIC(4,2),          -- NULL until ≥2 pulse points
+    mood_drift_flag             BOOLEAN     NOT NULL DEFAULT FALSE,
+
+    -- Help-seeking behaviour
+    help_seeking_rate           NUMERIC(5,4) DEFAULT 0,
+    messages_to_facilitator     INTEGER     DEFAULT 0,
+    forum_questions_asked       INTEGER     DEFAULT 0,
+    feedback_response_lag_hours INTEGER,
+
+    -- Voluntary engagement
+    voluntary_engagement_rate   NUMERIC(5,4) DEFAULT 0,
+    voluntary_engagement_delta  NUMERIC(7,4),          -- NULL if no prior week baseline
+
+    -- Badge / gamification response
+    badge_earned_this_week      BOOLEAN     NOT NULL DEFAULT FALSE,
+    badge_response_delta        NUMERIC(6,4),          -- % change in access after badge
+
+    -- RE input data
+    colour_flags                JSONB       DEFAULT '{}',
+    raw_data                    JSONB       DEFAULT '{}',
+
+    computed_at                 TIMESTAMPTZ,
+    created_at                  TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE (learner_id, course_id, week_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_es_learner     ON emotional_signals (learner_id, course_id);
+CREATE INDEX IF NOT EXISTS idx_es_week        ON emotional_signals (course_id, week_number);
+CREATE INDEX IF NOT EXISTS idx_es_drift_flag  ON emotional_signals (mood_drift_flag) WHERE mood_drift_flag = TRUE;
+CREATE INDEX IF NOT EXISTS idx_es_pulse_low   ON emotional_signals (pulse_composite) WHERE pulse_composite < 2.0;
+
+-- =============================================================================
+--  TABLE 27: risk_scores  (RE — Risk Scoring Engine)
+--
+--  Computed every Monday per learner per course.
+--  Aggregates L1 + L2 + L3 weighted contributions into a final risk score (0–100).
+--  The tier value drives the Intervention Engine (IE).
+--
+--  Tier thresholds:
+--    0 = GREEN  (0–25)   — passive monitoring
+--    1 = AMBER  (25–50)  — auto-nudge via IE template
+--    2 = ORANGE (50–75)  — facilitator outreach within 48hrs
+--    3 = RED    (75–100) — immediate pastoral escalation
+--
+--  anomaly_flag = TRUE when score_delta > 20 in a single week
+--
+--  signal_breakdown (JSONB) structure per signal key:
+--    { "raw": <value>, "normalised": 0–1, "weight": 0–1, "contribution": pts, "colour": flag }
+--
+--  Profile-specific weights (example for H-profile):
+--    optional_resource_access_rate  0.20
+--    quiz_learning_delta            0.15
+--    mood_drift_score               0.20
+--    voluntary_engagement_delta     0.15
+--    time_on_task_hours             0.10
+--    login_frequency                0.10
+--    feedback_uptake_lag_hours      0.10
+--    forum_post_rate                0.00  (not scored for H)
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS risk_scores (
+    id                      TEXT        PRIMARY KEY,
+    learner_id              TEXT        NOT NULL REFERENCES users   (id) ON DELETE CASCADE,
+    course_id               TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    week_number             SMALLINT    NOT NULL CHECK (week_number >= 1),
+    profile_type            TEXT        NOT NULL
+                                        CHECK (profile_type IN ('H', 'A', 'T', 'C', 'mixed')),
+
+    -- Layer contributions (0–100 each; their weighted sum = final_score)
+    l1_contribution         NUMERIC(6,3) DEFAULT 0,   -- behavioural layer points
+    l2_contribution         NUMERIC(6,3) DEFAULT 0,   -- cognitive layer points
+    l3_contribution         NUMERIC(6,3) DEFAULT 0,   -- emotional layer points
+
+    -- Scores
+    primary_score           NUMERIC(6,3),              -- score from primary profile weights
+    secondary_score         NUMERIC(6,3),              -- score from secondary profile (mixed only)
+    final_score             NUMERIC(6,3) NOT NULL      -- blended/primary, 0–100
+                                         CHECK (final_score >= 0 AND final_score <= 100),
+
+    -- Trend
+    previous_week_score     NUMERIC(6,3),              -- NULL in calibration weeks
+    score_delta             NUMERIC(7,3),              -- final_score – previous_week_score
+
+    -- Risk classification
+    tier                    SMALLINT    NOT NULL DEFAULT 0
+                                        CHECK (tier BETWEEN 0 AND 3),
+    anomaly_flag            BOOLEAN     NOT NULL DEFAULT FALSE,
+
+    -- Full signal-level breakdown (JSONB)
+    signal_breakdown        JSONB       DEFAULT '{}',
+
+    -- Auto-generated facilitator narrative from RE
+    facilitator_notes_prompt TEXT,
+
+    computed_at             TIMESTAMPTZ,
+    created_at              TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE (learner_id, course_id, week_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rs_learner      ON risk_scores (learner_id, course_id);
+CREATE INDEX IF NOT EXISTS idx_rs_week         ON risk_scores (course_id, week_number);
+CREATE INDEX IF NOT EXISTS idx_rs_tier         ON risk_scores (tier);
+CREATE INDEX IF NOT EXISTS idx_rs_anomaly      ON risk_scores (anomaly_flag) WHERE anomaly_flag = TRUE;
+CREATE INDEX IF NOT EXISTS idx_rs_high_risk    ON risk_scores (final_score) WHERE final_score >= 50;
+
+-- =============================================================================
+--  TABLE 28: interventions  (IE — Intervention Engine)
+--
+--  Records every automated and facilitator-initiated intervention.
+--  Triggered by risk_scores.tier crossing a threshold.
+--
+--  Tier → channel mapping (defaults, overridable by facilitator):
+--    T1 AMBER  → lms_message (automated template)
+--    T2 ORANGE → lms_message + email (facilitator-personalised)
+--    T3 RED    → video_call + pastoral_referral (human-led)
+--
+--  Template naming convention: {PROFILE}_{TIER}_{FOCUS}
+--    e.g. H_T1_nudge | C_T2_pedagogical | A_T3_pastoral
+--
+--  cooldown_expires_at: next intervention for same learner blocked until this time
+--  score_at_t7:  RE score re-checked 7 days after intervention (FL)
+--  score_at_t14: RE score re-checked 14 days after intervention (FL)
+--  outcome:      populated by feedback_evaluations after evaluation period
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS interventions (
+    id                  TEXT        PRIMARY KEY,
+    learner_id          TEXT        NOT NULL REFERENCES users   (id) ON DELETE CASCADE,
+    course_id           TEXT        NOT NULL REFERENCES courses (id) ON DELETE CASCADE,
+    facilitator_id      TEXT        REFERENCES users (id) ON DELETE SET NULL,
+    week_number         SMALLINT    NOT NULL,
+
+    -- Trigger context
+    tier                SMALLINT    NOT NULL CHECK (tier BETWEEN 1 AND 3),
+    trigger_score       NUMERIC(6,3) NOT NULL,
+    profile_type        TEXT        NOT NULL
+                                    CHECK (profile_type IN ('H', 'A', 'T', 'C', 'mixed')),
+
+    -- Delivery
+    channel             TEXT        NOT NULL
+                                    CHECK (channel IN (
+                                        'lms_message', 'email',
+                                        'video_call', 'pastoral_referral'
+                                    )),
+    template_id         TEXT        NOT NULL,          -- e.g. "H_T1_nudge"
+    message_body        TEXT        NOT NULL,
+
+    -- Timing
+    sent_at             TIMESTAMPTZ,
+    cooldown_expires_at TIMESTAMPTZ,
+
+    -- FL outcome tracking (populated by feedback_evaluations)
+    score_at_t7         NUMERIC(6,3),                  -- RE score 7 days post-intervention
+    score_at_t14        NUMERIC(6,3),                  -- RE score 14 days post-intervention
+    outcome             TEXT        CHECK (outcome IN (
+                                        'no_change', 'partial_recovery',
+                                        'recovered', 'escalated'
+                                    )),                -- NULL until evaluated
+
+    notes               TEXT,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_iv_learner  ON interventions (learner_id, course_id);
+CREATE INDEX IF NOT EXISTS idx_iv_tier     ON interventions (tier);
+CREATE INDEX IF NOT EXISTS idx_iv_week     ON interventions (course_id, week_number);
+CREATE INDEX IF NOT EXISTS idx_iv_outcome  ON interventions (outcome);
+CREATE INDEX IF NOT EXISTS idx_iv_pending  ON interventions (outcome) WHERE outcome IS NULL;
+
+-- =============================================================================
+--  TABLE 29: feedback_evaluations  (FL — Feedback Loop)
+--
+--  Evaluates whether interventions achieved recovery (T+7, T+14 check-ins).
+--  Feeds back into the RE model to refine tier thresholds per profile type.
+--
+--  recovery_threshold_met:
+--    TRUE  if final_score dropped ≥10pts from trigger_score within 14 days
+--
+--  re_threshold_adjustment (JSONB):
+--    If outcome = 'worsened', system may recommend reducing trigger thresholds.
+--    e.g. {"profile":"C","recommendation":"reduce T1 from 40 to 35","rationale":"..."}
+--
+--  This table drives the model learning loop:
+--    outcome 'worsened' → lower tier trigger threshold for that profile type
+--    outcome 'recovered' → current threshold appropriate
+--    outcome 'partial_recovery' → monitor, no change
+--    outcome 'escalated' → re-evaluate intervention channel for profile
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS feedback_evaluations (
+    id                          TEXT        PRIMARY KEY,
+    intervention_id             TEXT        NOT NULL REFERENCES interventions (id) ON DELETE CASCADE,
+    learner_id                  TEXT        NOT NULL REFERENCES users         (id) ON DELETE CASCADE,
+    course_id                   TEXT        NOT NULL REFERENCES courses       (id) ON DELETE CASCADE,
+    evaluated_at_week           SMALLINT    NOT NULL,
+
+    -- Score trajectory
+    score_before                NUMERIC(6,3) NOT NULL,
+    score_at_t7                 NUMERIC(6,3),
+    score_at_t14                NUMERIC(6,3),
+    score_delta_t7              NUMERIC(7,3),          -- score_at_t7  – score_before (negative = improvement)
+    score_delta_t14             NUMERIC(7,3),          -- score_at_t14 – score_before (negative = improvement)
+
+    -- Outcome
+    recovery_threshold_met      BOOLEAN     NOT NULL DEFAULT FALSE,
+    outcome_label               TEXT        NOT NULL
+                                            CHECK (outcome_label IN (
+                                                'recovered', 'partial_recovery',
+                                                'no_change', 'worsened', 'escalated'
+                                            )),
+
+    -- RE calibration recommendation
+    re_threshold_adjustment     JSONB,                 -- NULL if no change required
+
+    -- Human-readable model notes
+    model_notes                 TEXT,
+
+    created_at                  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_fe_intervention ON feedback_evaluations (intervention_id);
+CREATE INDEX IF NOT EXISTS idx_fe_learner      ON feedback_evaluations (learner_id);
+CREATE INDEX IF NOT EXISTS idx_fe_outcome      ON feedback_evaluations (outcome_label);
+CREATE INDEX IF NOT EXISTS idx_fe_worsened     ON feedback_evaluations (outcome_label)
+    WHERE outcome_label IN ('worsened', 'escalated');
+
+-- =============================================================================
+--  TABLE 30: profile_drift_logs  (FL — Feedback Loop)
+--
+--  Records when a learner's actual behaviour diverges from their declared
+--  L0 profile for 2+ consecutive weeks (profile drift detection).
+--
+--  drift_severity:
+--    mild     — partial degradation, still recognisably on-profile
+--    moderate — significant mismatch but some on-profile signals remain
+--    severe   — complete inversion or withdrawal; antithetical to profile
+--
+--  When drift is detected:
+--    1. learner_profiles.drift_flag is set to TRUE
+--    2. learner_profiles.drift_weeks_count is incremented
+--    3. RE applies "disengaged" signal weights until drift resolves
+--    4. facilitator_alerted = TRUE triggers notification
+--    5. Profile re-declaration offer sent to learner (configurable at week N)
+--
+--  resolution values:
+--    partial_recovery — signals improved, drift flag removed
+--    re_declared      — learner updated their L0 profile
+--    NULL             — unresolved / ongoing
+-- =============================================================================
+CREATE TABLE IF NOT EXISTS profile_drift_logs (
+    id                  TEXT        PRIMARY KEY,
+    learner_id          TEXT        NOT NULL REFERENCES users          (id) ON DELETE CASCADE,
+    course_id           TEXT        NOT NULL REFERENCES courses        (id) ON DELETE CASCADE,
+    detected_at_week    SMALLINT    NOT NULL,
+
+    -- What was declared vs what was observed
+    declared_profile    TEXT        NOT NULL CHECK (declared_profile IN ('H', 'A', 'T', 'C')),
+    observed_pattern    TEXT        NOT NULL,          -- narrative description of actual behaviour
+    drift_direction     TEXT        NOT NULL,          -- e.g. "A → isolated (inverse of declared)"
+
+    -- Severity classification
+    drift_severity      TEXT        NOT NULL DEFAULT 'mild'
+                                    CHECK (drift_severity IN ('mild', 'moderate', 'severe')),
+
+    -- Timestamps and flags
+    drift_confirmed_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    facilitator_alerted BOOLEAN     NOT NULL DEFAULT FALSE,
+
+    -- Resolution tracking
+    resolution          TEXT        CHECK (resolution IN (
+                                        'partial_recovery', 're_declared', NULL
+                                    )),
+    resolved_at         TIMESTAMPTZ,
+
+    -- System notes
+    notes               TEXT,
+
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_pdl_learner   ON profile_drift_logs (learner_id, course_id);
+CREATE INDEX IF NOT EXISTS idx_pdl_severity  ON profile_drift_logs (drift_severity);
+CREATE INDEX IF NOT EXISTS idx_pdl_unresolved ON profile_drift_logs (resolution)
+    WHERE resolution IS NULL;
+
+-- =============================================================================
+-- =============================================================================
+--  SEED DATA
+-- =============================================================================
+-- =============================================================================
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: users
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO users (id, name, email, role, initials, department, institution, country, timezone, language, bio, join_date, last_access, enrolled_courses) VALUES
+('user1',  'Dr. Sarah Johnson',   'sarah.johnson@university.edu', 'instructor', 'SJ', 'Computer Science', 'University of Technology', 'United States', 'America/New_York',    'English', 'Experienced instructor in Computer Science and Programming. PhD from MIT. 10+ years teaching experience.', '2019-09-01', 'Today',        2),
+('user2',  'Prof. Michael Chen',  'm.chen@university.edu',        'instructor', 'MC', 'Computer Science', 'University of Technology', 'United States', 'America/Los_Angeles', 'English', 'Professor of Machine Learning and AI. Research focus on deep learning and model optimization.',            '2017-01-15', 'Today',        1),
+('user3',  'Dr. Emily Roberts',   'e.roberts@university.edu',     'instructor', 'ER', 'Business',         'University of Technology', 'United Kingdom','Europe/London',       'English', 'Business strategy and management expert. MBA from Oxford, DBA from LSE.',                                 '2020-03-10', '2 days ago',   1),
+('user4',  'Prof. Alan Turing',   'a.turing@university.edu',      'instructor', 'AT', 'Mathematics',      'University of Technology', 'United Kingdom','Europe/London',       'English', 'Professor of Pure Mathematics. Research in computational theory and applied mathematics.',                  '2015-09-01', '1 week ago',   1),
+('admin1', 'Admin User',          'admin@university.edu',         'admin',      'AU', 'Administration',   'University of Technology', 'United States', 'America/New_York',    'English', 'System administrator for EduAI LMS.',                                                                         '2015-01-01', 'Today',        0),
+('p1',     'Alice Thompson',      'alice@university.edu',         'student',    'AT', 'Computer Science', 'University of Technology', 'United States', 'America/New_York',    'English', NULL, '2025-09-01', '2 hours ago',  3),
+('p2',     'Bob Martinez',        'bob@university.edu',           'student',    'BM', 'Computer Science', 'University of Technology', 'United States', 'America/Chicago',     'English', NULL, '2025-09-01', '1 day ago',    3),
+('p3',     'Carol White',         'carol@university.edu',         'student',    'CW', 'Computer Science', 'University of Technology', 'United States', 'America/Los_Angeles', 'English', NULL, '2025-09-01', '3 hours ago',  3),
+('p4',     'David Kim',           'david@university.edu',         'student',    'DK', 'Computer Science', 'University of Technology', 'United States', 'America/New_York',    'English', NULL, '2025-09-01', '5 days ago',   3),
+('p5',     'Emma Wilson',         'emma@university.edu',          'student',    'EW', 'Computer Science', 'University of Technology', 'United States', 'America/Denver',      'English', NULL, '2025-09-01', 'Today',        3),
+('p6',     'Frank Lee',           'frank@university.edu',         'student',    'FL', 'Computer Science', 'University of Technology', 'United States', 'America/New_York',    'English', NULL, '2025-09-01', '2 days ago',   3),
+('p7',     'Grace Chen',          'grace@university.edu',         'student',    'GC', 'Computer Science', 'University of Technology', 'United States', 'America/Los_Angeles', 'English', 'Teaching assistant for CS department.', '2024-09-01', 'Today', 3),
+('p8',     'Henry Adams',         'henry@university.edu',         'student',    'HA', 'Computer Science', 'University of Technology', 'United States', 'America/New_York',    'English', NULL, '2025-09-01', '1 week ago',   3)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: categories
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO categories (id, name, description, parent_id, id_number, course_count, child_count) VALUES
+('cat1', 'Computer Science', 'CS and programming courses',           NULL,   'CS001',    8, 2),
+('cat2', 'Web Development',  'Frontend and backend development',     'cat1', 'CS-WEB',   4, 0),
+('cat3', 'Data Science',     'ML and data analytics',               'cat1', 'CS-DS',    3, 0),
+('cat4', 'Mathematics',      'Pure and applied mathematics',         NULL,   'MATH',     5, 1),
+('cat5', 'Calculus',         'Differential and integral calculus',  'cat4', 'MATH-CALC',2, 0),
+('cat6', 'Business',         'Business and management courses',      NULL,   'BUS',      6, 0),
+('cat7', 'Sciences',         'Natural sciences',                     NULL,   'SCI',      4, 0)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: courses
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO courses (id, name, short_name, description, category_id, category_name, instructor_id, instructor_name, enrolled_students, status, visibility, format, start_date, end_date, language, tags) VALUES
+('course1','Introduction to Python Programming','PYTH101','Learn Python from scratch with hands-on projects',   'cat2','Web Development','user1','Dr. Sarah Johnson', 142,'active','shown', 'topics','2026-01-15','2026-06-15','English',ARRAY['python','programming','beginner']),
+('course2','Advanced Machine Learning',         'ML401',  'Deep learning, neural networks, and model deployment','cat3','Data Science',  'user2','Prof. Michael Chen',89, 'active','shown', 'weekly','2026-01-20','2026-05-20','English',ARRAY['ml','ai','deeplearning']),
+('course3','Business Management Fundamentals',  'BUS101', 'Core concepts in business strategy and management',  'cat6','Business',      'user3','Dr. Emily Roberts', 215,'active','shown', 'topics','2026-01-10','2026-05-10','English',ARRAY['business','management','strategy']),
+('course4','Calculus I: Differential Calculus', 'CALC101','Limits, derivatives, and applications',              'cat5','Calculus',      'user4','Prof. Alan Turing', 178,'draft', 'hidden','weekly','2026-03-01','2026-07-01','English',ARRAY['math','calculus','derivatives']),
+('course5','React & TypeScript Mastery',        'REACT301','Build modern web apps with React and TypeScript',   'cat2','Web Development','user1','Dr. Sarah Johnson', 98, 'active','shown', 'topics','2026-02-01','2026-06-01','English',ARRAY['react','typescript','frontend'])
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: sections
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO sections (id, course_id, title, summary, sort_order, visible) VALUES
+('sec0-c1','course1','General',                       NULL, 0, TRUE),
+('sec1-c1','course1','Week 1: Introduction to Python',NULL, 1, TRUE),
+('sec2-c1','course1','Week 2: Control Flow',           NULL, 2, TRUE),
+('sec3-c1','course1','Week 3: Functions & Modules',    NULL, 3, TRUE),
+('sec4-c1','course1','Week 4: OOP Fundamentals',       NULL, 4, TRUE),
+('sec0-c2','course2','General',                        NULL, 0, TRUE),
+('sec1-c2','course2','Module 1: Foundations',          NULL, 1, TRUE),
+('sec2-c2','course2','Module 2: Neural Networks',      NULL, 2, TRUE),
+('sec0-c3','course3','General',                        NULL, 0, TRUE),
+('sec1-c3','course3','Introduction to Management',     NULL, 1, TRUE),
+('sec0-c4','course4','General',                        NULL, 0, TRUE),
+('sec0-c5','course5','General',                        NULL, 0, TRUE),
+('sec1-c5','course5','React Fundamentals',             NULL, 1, TRUE)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: activities
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO activities (id, section_id, course_id, type, name, description, due_date, visible, completion_status, grade_max, sort_order) VALUES
+('a1',  'sec0-c1','course1','forum',     'News and Announcements',         NULL, NULL,         TRUE, 'none',      NULL,  0),
+('a2',  'sec1-c1','course1','page',      'Course Introduction & Setup',    NULL, NULL,         TRUE, 'completed', NULL,  0),
+('a3',  'sec1-c1','course1','file',      'Python Installation Guide.pdf',  NULL, NULL,         TRUE, 'completed', NULL,  1),
+('a4',  'sec1-c1','course1','quiz',      'Quiz 1: Python Basics',          NULL, '2026-02-01', TRUE, 'completed', 100,   2),
+('a5',  'sec2-c1','course1','url',       'Python Docs - Control Flow',     NULL, NULL,         TRUE, 'incomplete',NULL,  0),
+('a6',  'sec2-c1','course1','assignment','Assignment 1: FizzBuzz',         NULL, '2026-02-08', TRUE, 'incomplete',50,    1),
+('a7',  'sec2-c1','course1','h5p',       'Interactive: Python Loops',      NULL, NULL,         TRUE, 'none',      NULL,  2),
+('a8',  'sec3-c1','course1','quiz',      'Quiz 2: Functions',              NULL, '2026-02-15', TRUE, 'none',      100,   0),
+('a9',  'sec3-c1','course1','workshop',  'Workshop: Peer Code Review',     NULL, NULL,         TRUE, 'none',      NULL,  1),
+('a10', 'sec4-c1','course1','scorm',     'OOP Concepts - SCORM Package',   NULL, NULL,         TRUE, 'none',      NULL,  0),
+('b1',  'sec0-c2','course2','forum',     'Announcements',                  NULL, NULL,         TRUE, 'none',      NULL,  0),
+('b2',  'sec1-c2','course2','quiz',      'Pre-assessment Quiz',            NULL, NULL,         TRUE, 'none',      100,   0),
+('b3',  'sec1-c2','course2','assignment','Assignment: Linear Regression',  NULL, '2026-02-10', TRUE, 'none',      100,   1),
+('b4',  'sec2-c2','course2','file',      'NN Architecture Reference.pdf',  NULL, NULL,         TRUE, 'none',      NULL,  0),
+('b5',  'sec2-c2','course2','quiz',      'Quiz: Neural Networks',          NULL, NULL,         TRUE, 'none',      100,   1),
+('c1',  'sec0-c3','course3','forum',     'Discussion Forum',               NULL, NULL,         TRUE, 'none',      NULL,  0),
+('c2',  'sec1-c3','course3','quiz',      'Quiz 1',                         NULL, NULL,         TRUE, 'none',      100,   0),
+('d1',  'sec0-c5','course5','forum',     'Q&A Forum',                      NULL, NULL,         TRUE, 'none',      NULL,  0),
+('d2',  'sec1-c5','course5','assignment','Build a Todo App',               NULL, NULL,         TRUE, 'none',      100,   0)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: enrollments
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO enrollments (id, user_id, course_id, role, enrolled_date, last_access, progress, groups) VALUES
+('e1',  'p1',    'course1','student',           '2026-01-15', '2 hours ago', 85,  ARRAY['Group A']),
+('e2',  'p2',    'course1','student',           '2026-01-15', '1 day ago',   62,  ARRAY['Group B']),
+('e3',  'p3',    'course1','student',           '2026-01-16', '3 hours ago', 91,  ARRAY['Group A']),
+('e4',  'p4',    'course1','student',           '2026-01-18', '5 days ago',  23,  ARRAY['Group B']),
+('e5',  'p5',    'course1','student',           '2026-01-20', 'Today',       78,  ARRAY['Group A']),
+('e6',  'p6',    'course1','student',           '2026-01-20', '2 days ago',  45,  ARRAY['Group C']),
+('e7',  'p7',    'course1','teaching_assistant','2026-01-14', 'Today',       100, ARRAY[]::TEXT[]),
+('e8',  'p8',    'course1','student',           '2026-01-22', '1 week ago',  12,  ARRAY['Group C']),
+('e9',  'p1',    'course2','student',           '2026-01-20', 'Today',       70,  ARRAY[]::TEXT[]),
+('e10', 'p2',    'course2','student',           '2026-01-20', '2 days ago',  55,  ARRAY[]::TEXT[]),
+('e11', 'p3',    'course3','student',           '2026-01-10', 'Today',       88,  ARRAY[]::TEXT[]),
+('e12', 'p4',    'course3','student',           '2026-01-10', '1 week ago',  20,  ARRAY[]::TEXT[]),
+('e13', 'p5',    'course5','student',           '2026-02-01', 'Today',       60,  ARRAY[]::TEXT[]),
+('e14', 'user1', 'course1','instructor',        '2026-01-01', 'Today',       100, ARRAY[]::TEXT[]),
+('e15', 'user1', 'course5','instructor',        '2026-01-01', 'Today',       100, ARRAY[]::TEXT[]),
+('e16', 'user2', 'course2','instructor',        '2026-01-01', 'Today',       100, ARRAY[]::TEXT[]),
+('e17', 'user3', 'course3','instructor',        '2026-01-01', '2 days ago',  100, ARRAY[]::TEXT[]),
+('e18', 'user4', 'course4','instructor',        '2026-01-01', '1 week ago',  100, ARRAY[]::TEXT[])
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: grade_items
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO grade_items (id, course_id, activity_id, activity_name, activity_type, grade_max) VALUES
+('g1','course1','a4','Quiz 1: Python Basics',  'quiz',       100),
+('g2','course1','a6','Assignment 1: FizzBuzz', 'assignment',  50),
+('g3','course1','a8','Quiz 2: Functions',       'quiz',       100)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: student_grades
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO student_grades (id, grade_item_id, student_id, student_name, grade, percentage, feedback, submitted_date, status) VALUES
+('sg1',  'g1','p1','Alice Thompson', 92,   92,   NULL,              '2026-02-01', 'graded'),
+('sg2',  'g1','p2','Bob Martinez',   78,   78,   NULL,              '2026-02-01', 'graded'),
+('sg3',  'g1','p3','Carol White',    95,   95,   NULL,              '2026-01-31', 'graded'),
+('sg4',  'g1','p4','David Kim',      NULL, NULL, NULL,              NULL,         'not_submitted'),
+('sg5',  'g1','p5','Emma Wilson',    88,   88,   NULL,              '2026-02-01', 'graded'),
+('sg6',  'g2','p1','Alice Thompson', 48,   96,   'Excellent work!', '2026-02-07', 'graded'),
+('sg7',  'g2','p2','Bob Martinez',   35,   70,   NULL,              '2026-02-08', 'graded'),
+('sg8',  'g2','p3','Carol White',    50,   100,  NULL,              '2026-02-06', 'graded'),
+('sg9',  'g2','p4','David Kim',      22,   44,   NULL,              '2026-02-10', 'late'),
+('sg10', 'g2','p5','Emma Wilson',    43,   86,   NULL,              '2026-02-07', 'graded'),
+('sg11', 'g3','p1','Alice Thompson', NULL, NULL, NULL,              NULL,         'not_submitted'),
+('sg12', 'g3','p2','Bob Martinez',   NULL, NULL, NULL,              NULL,         'not_submitted'),
+('sg13', 'g3','p3','Carol White',    89,   89,   NULL,              '2026-02-15', 'graded'),
+('sg14', 'g3','p4','David Kim',      NULL, NULL, NULL,              NULL,         'not_submitted'),
+('sg15', 'g3','p5','Emma Wilson',    76,   76,   NULL,              '2026-02-15', 'submitted')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: notifications
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO notifications (id, user_id, title, message, timestamp, read, type) VALUES
+('n1','user1','Quiz Submission',    'Alice Thompson submitted Quiz 1: Python Basics',       '2 minutes ago', FALSE,'info'),
+('n2','user1','Assignment Due Soon','Assignment 1: FizzBuzz is due in 24 hours',            '1 hour ago',    FALSE,'warning'),
+('n3','user1','New Enrollment',     '5 new students enrolled in Introduction to Python',    '3 hours ago',   FALSE,'success'),
+('n4','user1','Forum Post',         'Bob Martinez posted a question in Discussion Forum',   '5 hours ago',   TRUE, 'info'),
+('n5','user1','Grade Updated',      'Carol White''s grade has been updated for Assignment 1','1 day ago',    TRUE, 'success'),
+('n6','user1','Course Published',   'React & TypeScript Mastery is now published',          '2 days ago',    TRUE, 'success'),
+('n7','user1','System Maintenance', 'Scheduled maintenance on Saturday, April 18, 2026',   '3 days ago',    TRUE, 'warning')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: conversations
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO conversations (id, owner_user_id, participant_user_id, participant_name, participant_role, last_message, last_message_time, unread_count, course_id) VALUES
+('conv1','user1','p1',    'Alice Thompson',    'Student',    'Thank you for the feedback on my assignment!','10:32 AM',    2, 'course1'),
+('conv2','user1','p2',    'Bob Martinez',      'Student',    'When is the next quiz scheduled?',           'Yesterday',   1, 'course1'),
+('conv3','user1','user2', 'Prof. Michael Chen','Instructor', 'Let''s collaborate on the AI course materials','2 days ago', 0, NULL)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: messages
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO messages (id, conversation_id, sender_id, sender_name, content, timestamp, read) VALUES
+('m1',  'conv1','user1','Dr. Sarah Johnson',  'Hi Alice, I reviewed your assignment. Great work overall!',       '10:15 AM',          TRUE),
+('m2',  'conv1','p1',   'Alice Thompson',     'Thank you so much! I worked really hard on it.',                  '10:20 AM',          TRUE),
+('m3',  'conv1','p1',   'Alice Thompson',     'Could you elaborate on the feedback for section 3?',              '10:30 AM',          FALSE),
+('m4',  'conv1','p1',   'Alice Thompson',     'Thank you for the feedback on my assignment!',                    '10:32 AM',          FALSE),
+('m5',  'conv2','p2',   'Bob Martinez',       'Professor, I have a question about this week''s lecture.',        'Yesterday 3:00 PM', TRUE),
+('m6',  'conv2','user1','Dr. Sarah Johnson',  'Sure, what''s your question?',                                   'Yesterday 3:05 PM', TRUE),
+('m7',  'conv2','p2',   'Bob Martinez',       'When is the next quiz scheduled?',                                'Yesterday 3:10 PM', FALSE),
+('m8',  'conv3','user2','Prof. Michael Chen', 'Hi Sarah, would you like to collaborate on some AI course materials?','2 days ago',    TRUE),
+('m9',  'conv3','user1','Dr. Sarah Johnson',  'That sounds great! Let''s meet this week.',                       '2 days ago',        TRUE),
+('m10', 'conv3','user2','Prof. Michael Chen', 'Let''s collaborate on the AI course materials',                   '2 days ago',        TRUE)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: quiz_questions
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO quiz_questions (id, activity_id, course_id, type, question_text, category, default_mark, shuffle_answers, multiple_answers, correct_answer, penalty, hints, matching_pairs) VALUES
+('qq1','a4','course1','multiple_choice','Which of the following is the correct way to declare a variable in Python?',                                                   'Python Basics',  1, TRUE, FALSE, NULL,   0, ARRAY[]::TEXT[], '[]'),
+('qq2','a4','course1','true_false',     'Python is a statically typed programming language.',                                                                           'Python Basics',  1, FALSE,FALSE, 'False',0, ARRAY['Think about how you declare variables in Python.'], '[]'),
+('qq3','a4','course1','short_answer',   'What function is used to display output to the console in Python?',                                                             'Python Basics',  1, FALSE,FALSE, 'print',0, ARRAY[]::TEXT[], '[]'),
+('qq4','a8','course1','essay',          'Explain the concept of recursion in Python and provide an example of a recursive function.',                                    'Functions',      5, FALSE,FALSE, NULL,   0, ARRAY[]::TEXT[], '[]'),
+('qq5','a8','course1','matching',       'Match each Python built-in function to its correct description.',                                                               'Functions',      3, TRUE, FALSE, NULL,   0, ARRAY[]::TEXT[], '[{"question":"print()","answer":"Outputs text to console"},{"question":"len()","answer":"Returns length of object"},{"question":"range()","answer":"Generates sequence of numbers"}]'),
+('qq6','a8','course1','numerical',      'What is the output of len([1, 2, 3, 4, 5])?',                                                                                  'Functions',      1, FALSE,FALSE, '5',    0, ARRAY[]::TEXT[], '[]'),
+('qq7','b2','course2','multiple_choice','Which of the following is a supervised learning algorithm?',                                                                    'ML Foundations', 1, TRUE, FALSE, NULL,   0, ARRAY[]::TEXT[], '[]'),
+('qq8','b5','course2','multiple_choice','What is the activation function used in the output layer for binary classification?',                                            'Neural Networks',1, TRUE, FALSE, NULL,   0, ARRAY[]::TEXT[], '[]')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: quiz_answers
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO quiz_answers (id, question_id, text, grade_fraction, feedback, sort_order) VALUES
+('qa1',  'qq1','x = 10',             1.0, 'Correct! This is the standard way to assign a variable in Python.', 0),
+('qa2',  'qq1','int x = 10;',        0.0, 'Incorrect. That is Java/C# syntax, not Python.',                    1),
+('qa3',  'qq1','var x = 10',         0.0, 'Incorrect. That is JavaScript syntax.',                             2),
+('qa4',  'qq1','declare x = 10',     0.0, 'Incorrect. Python does not use a ''declare'' keyword.',             3),
+('qa5',  'qq5','print()',             1.0, NULL, 0),
+('qa6',  'qq5','len()',               1.0, NULL, 1),
+('qa7',  'qq5','range()',             1.0, NULL, 2),
+('qa8',  'qq7','Linear Regression',  1.0, 'Correct! Linear Regression is a supervised learning algorithm.',   0),
+('qa9',  'qq7','K-Means Clustering', 0.0, 'Incorrect. K-Means is an unsupervised algorithm.',                  1),
+('qa10', 'qq7','DBSCAN',             0.0, 'Incorrect. DBSCAN is unsupervised.',                                2),
+('qa11', 'qq7','PCA',                0.0, 'Incorrect. PCA is a dimensionality reduction technique.',           3),
+('qa12', 'qq8','Sigmoid',            1.0, 'Correct! Sigmoid outputs 0–1, ideal for binary classification.',   0),
+('qa13', 'qq8','ReLU',               0.0, 'Incorrect. ReLU is typically used in hidden layers.',               1),
+('qa14', 'qq8','Softmax',            0.0, 'Incorrect. Softmax is used for multi-class classification.',        2),
+('qa15', 'qq8','Tanh',               0.0, 'Incorrect. Tanh is used in hidden layers or RNNs.',                 3)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: ai_performance_snapshots
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO ai_performance_snapshots (id, course_id, week_label, avg_grade, completion_rate, engagement_score, recorded_at) VALUES
+('ps1','course1','W1', 72, 88, 91, '2026-01-19'),
+('ps2','course1','W2', 68, 82, 85, '2026-01-26'),
+('ps3','course1','W3', 74, 78, 79, '2026-02-02'),
+('ps4','course1','W4', 71, 85, 88, '2026-02-09'),
+('ps5','course1','W5', 79, 91, 93, '2026-02-16'),
+('ps6','course1','W6', 76, 87, 86, '2026-02-23'),
+('ps7','course1','W7', 82, 93, 95, '2026-03-02')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: ai_skill_metrics
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO ai_skill_metrics (id, course_id, skill_label, score, full_mark, recorded_at) VALUES
+('sm1','course1','Quiz Performance',    78, 100, '2026-03-02'),
+('sm2','course1','Assignment Quality',  82, 100, '2026-03-02'),
+('sm3','course1','Forum Participation', 65, 100, '2026-03-02'),
+('sm4','course1','Completion Rate',     89, 100, '2026-03-02'),
+('sm5','course1','Timeliness',          72, 100, '2026-03-02'),
+('sm6','course1','Peer Collaboration',  58, 100, '2026-03-02')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: ai_at_risk_students  (legacy simplified view)
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO ai_at_risk_students (id, course_id, student_id, student_name, progress, last_access, missed_activities, grade, risk_level, ai_recommendation, detected_at) VALUES
+('ar1','course1','p4','David Kim',   23,'5 days ago',4,32,'high',  'Schedule an immediate intervention meeting. Consider offering extended deadlines and additional support materials.','2026-04-13'),
+('ar2','course1','p8','Henry Adams', 12,'1 week ago', 7,18,'high',  'Schedule an immediate intervention meeting. Consider offering extended deadlines and additional support materials.','2026-04-13'),
+('ar3','course1','p6','Frank Lee',   45,'2 days ago', 2,58,'medium','Send an engagement reminder with resources. Monitor their progress over the next 3 days.',                         '2026-04-13'),
+('ar4','course1','p2','Bob Martinez',62,'1 day ago',  1,71,'low',   'Send an engagement reminder with resources. Monitor their progress over the next 3 days.',                         '2026-04-13')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: ai_recommendations
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO ai_recommendations (id, course_id, title, description, impact_level, icon_name, color_scheme, generated_at) VALUES
+('rec1','course1','Increase Quiz Frequency',         'Students with weekly quizzes show 23% better retention. Consider adding 2 more micro-quizzes to Week 3.','high',   'Zap',           'purple','2026-04-13'),
+('rec2','course1','Add Video Content to Weak Topics','Students struggle with OOP concepts. Adding short video explanations could improve understanding by ~30%.','medium', 'Lightbulb',     'amber', '2026-04-13'),
+('rec3','course1','Enable Peer Review',              'Workshop activities with peer review improve grades by 18% on average. Consider enabling it for Assignment 2.','high','Users',          'blue',  '2026-04-13'),
+('rec4','course1','Send Engagement Reminders',       '4 students haven''t accessed the course in 3+ days. Automated reminders can reduce dropout by 40%.',        'urgent','AlertTriangle',  'red',   '2026-04-13')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: ai_content_recommendations
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO ai_content_recommendations (id, course_id, title, content_type, relevance_score, source, url, generated_at) VALUES
+('cr1','course1','Python Classes Deep Dive',              'Video',      98,'YouTube',   'https://youtube.com',      '2026-04-13'),
+('cr2','course1','Object-Oriented Programming in Python', 'Article',    94,'Real Python','https://realpython.com',   '2026-04-13'),
+('cr3','course1','Practice: OOP Exercises',               'Interactive',91,'H5P',       NULL,                       '2026-04-13'),
+('cr4','course1','Python OOP Quiz Pack',                  'Quiz Bank',  89,'Internal',  NULL,                       '2026-04-13')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: ai_generated_questions
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO ai_generated_questions (id, course_id, activity_id, topic, question_text, question_type, difficulty, status, generated_at) VALUES
+('gq1','course1',NULL,'Object-Oriented Programming','What is the difference between a class and an object in Python?',                                                    'Essay',          'Medium','generated','2026-04-13T10:00:00Z'),
+('gq2','course1',NULL,'Object-Oriented Programming','Which of the following is a correct way to define a class in Python?',                                               'Multiple Choice','Easy',  'generated','2026-04-13T10:00:00Z'),
+('gq3','course1',NULL,'Object-Oriented Programming','In Python, the __init__ method is always called automatically when a new class object is created.',                   'True/False',     'Easy',  'generated','2026-04-13T10:00:00Z'),
+('gq4','course1',NULL,'Object-Oriented Programming','Write a Python class representing a BankAccount with deposit and withdraw methods.',                                   'Essay',          'Hard',  'generated','2026-04-13T10:00:00Z')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: user_preferences
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO user_preferences (id, user_id, preference_key, preference_label, description, enabled) VALUES
+('pref1','user1','email_notifications','Email notifications',   'Receive emails when students submit assignments',         TRUE),
+('pref2','user1','forum_subscriptions','Forum subscriptions',   'Get notified of new forum posts in my courses',           TRUE),
+('pref3','user1','grading_reminders',  'Grading reminders',     'Remind me of ungraded submissions after 48 hours',        TRUE),
+('pref4','user1','ai_suggestions',     'AI suggestions',        'Show AI-generated insights and recommendations',           TRUE)
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: activity_performance
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO activity_performance (id, course_id, activity_name, avg_score_percentage, grade_max, recorded_at) VALUES
+('ap1','course1','Quiz 1',       85, 100, '2026-03-02'),
+('ap2','course1','Assignment 1', 78,  50, '2026-03-02'),
+('ap3','course1','Quiz 2',       71, 100, '2026-03-02'),
+('ap4','course1','Forum',        90,  10, '2026-03-02')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: dashboard_engagement
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO dashboard_engagement (id, course_id, day_label, active_students, submissions, week_of) VALUES
+('de1','course1','Mon',120,45,'2026-04-07'),
+('de2','course1','Tue',138,60,'2026-04-07'),
+('de3','course1','Wed',105,38,'2026-04-07'),
+('de4','course1','Thu',156,72,'2026-04-07'),
+('de5','course1','Fri',144,55,'2026-04-07'),
+('de6','course1','Sat', 89,30,'2026-04-07'),
+('de7','course1','Sun', 67,22,'2026-04-07')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: learner_profiles  (L0)
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO learner_profiles (id, learner_id, course_id, primary_profile, secondary_profile, is_mixed_profile, mixed_blend_primary, mixed_blend_secondary, h_score, a_score, t_score, c_score, declared_preferences, lms_flags, pulse_consent, pulse_consent_at, drift_flag, drift_weeks_count, drift_flagged_at, profile_note) VALUES
+('lp1','p1','course1','H','T',FALSE,1.00,0.00,14,5,11, 7,
+  ARRAY['self-directed resolution','reflective processing','intrinsic curiosity','nonlinear autonomy'],
+  '{"open_navigation":true,"structured_pathway":false,"reflection_journals":true,"peer_review":false,"cohort_grouping":false,"self_assessment":true,"deadline_reminders":false}',
+  TRUE,'2026-01-15T09:00:00Z',FALSE,0,NULL,'H primary (14), T secondary (11). Self-directed with reflective tendency.'),
+
+('lp2','p2','course1','H','C',FALSE,1.00,0.00,13,7,9,10,
+  ARRAY['self-determination','nonlinear autonomy','self-evaluation','feedback-on-demand'],
+  '{"open_navigation":true,"structured_pathway":false,"reflection_journals":false,"peer_review":false,"cohort_grouping":false,"self_assessment":true,"deadline_reminders":false}',
+  TRUE,'2026-01-15T09:05:00Z',FALSE,0,NULL,'H primary (13), C secondary (10). Monitoring — quiz delta borderline at W7.'),
+
+('lp3','p3','course1','T','H',FALSE,1.00,0.00,10,6,15,8,
+  ARRAY['structured tasks','clear objectives','analytical reasoning','measurable outcomes'],
+  '{"open_navigation":false,"structured_pathway":true,"reflection_journals":false,"peer_review":false,"cohort_grouping":false,"self_assessment":true,"deadline_reminders":true}',
+  TRUE,'2026-01-16T08:30:00Z',FALSE,0,NULL,'T primary (15). Consistently high performance. On track.'),
+
+('lp4','p4','course1','C','T',FALSE,1.00,0.00,7,8,11,14,
+  ARRAY['structured pathway','cohort grouping','deadline reminders','instructor-led guidance'],
+  '{"open_navigation":false,"structured_pathway":true,"reflection_journals":false,"peer_review":true,"cohort_grouping":true,"self_assessment":false,"deadline_reminders":true}',
+  TRUE,'2026-01-18T10:00:00Z',TRUE,2,'2026-02-09T01:07:00Z','C primary (14). Drift confirmed W5. RE applying disengaged weights. Profile re-declaration offered W9.'),
+
+('lp5','p5','course1','H','A',FALSE,1.00,0.00,15,12,8,6,
+  ARRAY['self-directed resolution','intrinsic curiosity','peer collaboration','reflective processing'],
+  '{"open_navigation":true,"structured_pathway":false,"reflection_journals":true,"peer_review":true,"cohort_grouping":false,"self_assessment":true,"deadline_reminders":false}',
+  TRUE,'2026-01-20T09:00:00Z',FALSE,0,NULL,'H primary (15), A secondary (12). Engaged and on track.'),
+
+('lp6','p6','course1','T','C',FALSE,1.00,0.00,8,7,14,11,
+  ARRAY['structured tasks','measurable outcomes','step-by-step guidance','deadline awareness'],
+  '{"open_navigation":false,"structured_pathway":true,"reflection_journals":false,"peer_review":false,"cohort_grouping":true,"self_assessment":false,"deadline_reminders":true}',
+  TRUE,'2026-01-20T10:00:00Z',TRUE,1,'2026-02-16T01:06:00Z','T primary (14). Mild drift W5. T1 nudge partial recovery. Drift flag removed W7.'),
+
+('lp7','p7','course1','A','H',FALSE,1.00,0.00,11,15,9,7,
+  ARRAY['peer collaboration','group discussion','social learning','community building'],
+  '{"open_navigation":false,"structured_pathway":false,"reflection_journals":false,"peer_review":true,"cohort_grouping":true,"self_assessment":false,"deadline_reminders":false}',
+  TRUE,'2026-01-14T08:00:00Z',FALSE,0,NULL,'A primary (15). Teaching assistant. Fully engaged.'),
+
+('lp8','p8','course1','A','T',FALSE,1.00,0.00,8,14,10,9,
+  ARRAY['peer collaboration','group discussion','forum engagement','social accountability'],
+  '{"open_navigation":false,"structured_pathway":false,"reflection_journals":false,"peer_review":true,"cohort_grouping":true,"self_assessment":false,"deadline_reminders":true}',
+  TRUE,'2026-01-22T09:00:00Z',TRUE,3,'2026-02-09T01:07:00Z','A primary (14). Severe drift. Complete social withdrawal. T3 escalation. Student support notified.')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: behavioral_signals  (L1)  — key weeks for at-risk students
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO behavioral_signals (id, learner_id, course_id, week_number, login_frequency, time_on_task_hours, content_completion_rate, quiz_attempt_count, quiz_available_count, submission_timing, forum_post_count, forum_posts_required, navigation_pattern, normalised_values, colour_flags, raw_data, computed_at) VALUES
+-- David Kim (p4) W3 baseline (green)
+('bs_p4_w3','p4','course1',3, 5,5.80,0.88,5,5,'on_time',  2,2,'linear',
+  '{"login_frequency":0.00,"time_on_task_hours":0.00,"content_completion_rate":0.00,"quiz_attempt_rate":0.00,"submission_timing":0.00,"forum_post_rate":0.00}',
+  '{"login_frequency":"green","time_on_task_hours":"green","content_completion_rate":"green","quiz_attempt_rate":"green","submission_timing":"green","forum_post_rate":"green"}',
+  '{"resources_accessed":12,"optional_resources_accessed":3,"optional_resources_available":6,"lms_source":"lms_activity_log"}',
+  '2026-02-08T01:05:00Z'),
+
+-- David Kim (p4) W5 amber/orange
+('bs_p4_w5','p4','course1',5, 2,1.80,0.55,2,5,'late_3_5', 0,2,'linear',
+  '{"login_frequency":0.667,"time_on_task_hours":0.500,"content_completion_rate":0.556,"quiz_attempt_rate":0.800,"submission_timing":0.700,"forum_post_rate":1.000}',
+  '{"login_frequency":"amber","time_on_task_hours":"orange","content_completion_rate":"amber","quiz_attempt_rate":"amber","submission_timing":"orange","forum_post_rate":"red"}',
+  '{"resources_accessed":5,"optional_resources_accessed":0,"optional_resources_available":6,"lms_source":"lms_activity_log"}',
+  '2026-02-22T01:05:00Z'),
+
+-- David Kim (p4) W7 continued decline
+('bs_p4_w7','p4','course1',7, 2,1.80,0.55,2,5,'late_3_5', 0,2,'linear',
+  '{"login_frequency":0.667,"time_on_task_hours":0.500,"content_completion_rate":0.556,"quiz_attempt_rate":0.800,"submission_timing":0.700,"forum_post_rate":1.000}',
+  '{"login_frequency":"amber","time_on_task_hours":"orange","content_completion_rate":"amber","quiz_attempt_rate":"amber","submission_timing":"orange","forum_post_rate":"red"}',
+  '{"resources_accessed":4,"optional_resources_accessed":0,"optional_resources_available":6,"lms_source":"lms_activity_log"}',
+  '2026-03-08T01:05:00Z'),
+
+-- Henry Adams (p8) W3 baseline (green)
+('bs_p8_w3','p8','course1',3, 4,4.50,0.72,4,5,'on_time',  2,2,'linear',
+  '{"login_frequency":0.00,"time_on_task_hours":0.00,"content_completion_rate":0.00,"quiz_attempt_rate":0.00,"submission_timing":0.00,"forum_post_rate":0.00}',
+  '{"login_frequency":"green","time_on_task_hours":"green","content_completion_rate":"green","quiz_attempt_rate":"green","submission_timing":"green","forum_post_rate":"green"}',
+  '{"resources_accessed":10,"optional_resources_accessed":2,"optional_resources_available":5,"lms_source":"lms_activity_log"}',
+  '2026-02-08T01:05:00Z'),
+
+-- Henry Adams (p8) W5 collapse
+('bs_p8_w5','p8','course1',5, 2,1.50,0.48,1,5,'late_1_2', 0,2,'linear',
+  '{"login_frequency":0.500,"time_on_task_hours":0.667,"content_completion_rate":0.640,"quiz_attempt_rate":0.933,"submission_timing":0.400,"forum_post_rate":1.000}',
+  '{"login_frequency":"amber","time_on_task_hours":"amber","content_completion_rate":"orange","quiz_attempt_rate":"red","submission_timing":"amber","forum_post_rate":"red"}',
+  '{"resources_accessed":4,"optional_resources_accessed":0,"optional_resources_available":5,"lms_source":"lms_activity_log"}',
+  '2026-02-22T01:05:00Z'),
+
+-- Henry Adams (p8) W7 critical
+('bs_p8_w7','p8','course1',7, 1,0.80,0.38,1,5,'late_3_5', 0,2,'linear',
+  '{"login_frequency":0.833,"time_on_task_hours":0.833,"content_completion_rate":0.733,"quiz_attempt_rate":0.933,"submission_timing":0.700,"forum_post_rate":1.000}',
+  '{"login_frequency":"red","time_on_task_hours":"red","content_completion_rate":"red","quiz_attempt_rate":"red","submission_timing":"orange","forum_post_rate":"red"}',
+  '{"resources_accessed":2,"optional_resources_accessed":0,"optional_resources_available":5,"lms_source":"lms_activity_log"}',
+  '2026-03-08T01:05:00Z'),
+
+-- Frank Lee (p6) W5 amber
+('bs_p6_w5','p6','course1',5, 3,3.20,0.71,3,5,'late_1_2', 0,2,'linear',
+  '{"login_frequency":0.333,"time_on_task_hours":0.000,"content_completion_rate":0.000,"quiz_attempt_rate":0.571,"submission_timing":0.400,"forum_post_rate":1.000}',
+  '{"login_frequency":"amber","time_on_task_hours":"green","content_completion_rate":"green","quiz_attempt_rate":"amber","submission_timing":"amber","forum_post_rate":"amber"}',
+  '{"resources_accessed":7,"optional_resources_accessed":1,"optional_resources_available":6,"lms_source":"lms_activity_log"}',
+  '2026-02-22T01:05:00Z'),
+
+-- Bob Martinez (p2) W5 monitoring
+('bs_p2_w5','p2','course1',5, 4,4.50,0.78,4,5,'on_time',  1,2,'nonlinear',
+  '{"login_frequency":0.000,"time_on_task_hours":0.000,"content_completion_rate":0.000,"quiz_attempt_rate":0.000,"submission_timing":0.000,"forum_post_rate":0.500}',
+  '{"login_frequency":"green","time_on_task_hours":"green","content_completion_rate":"green","quiz_attempt_rate":"green","submission_timing":"green","forum_post_rate":"amber"}',
+  '{"resources_accessed":9,"optional_resources_accessed":3,"optional_resources_available":7,"lms_source":"lms_activity_log"}',
+  '2026-02-22T01:05:00Z')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: cognitive_signals  (L2)
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO cognitive_signals (id, learner_id, course_id, week_number, content_revisit_rate, revisit_flag, quiz_first_attempt_score, quiz_final_attempt_score, quiz_learning_delta, discussion_depth_score, avg_post_word_count, question_count, assertion_count, peer_response_rate, optional_resource_access_rate, feedback_uptake_lag_hours, normalised_values, colour_flags, raw_data, computed_at) VALUES
+-- David Kim (p4) W3
+('cs_p4_w3','p4','course1',3, 1.10,FALSE,75.0,82.0,0.4600, 71.0,185,1,5,0.6000,0.5000,12,
+  '{"quiz_learning_delta":0.00,"discussion_depth_score":0.00,"optional_resource_access_rate":0.00,"peer_response_rate":0.00,"feedback_uptake_lag_hours":0.00}',
+  '{"content_revisit_rate":"green","quiz_learning_delta":"green","discussion_depth_score":"green","optional_resource_access_rate":"green","peer_response_rate":"green","feedback_uptake_lag_hours":"green"}',
+  '{"source":"xapi_lrs","quiz_attempts":[{"attempt":1,"score":75.0},{"attempt":2,"score":82.0}],"resources_revisited":{}}',
+  '2026-02-08T01:05:45Z'),
+
+-- David Kim (p4) W5
+('cs_p4_w5','p4','course1',5, 2.90,FALSE,50.0,60.0,0.2000, NULL,0,0,0,0.0000,0.0000,96,
+  '{"quiz_learning_delta":0.5385,"optional_resource_access_rate":1.000,"peer_response_rate":1.000,"feedback_uptake_lag_hours":0.667}',
+  '{"content_revisit_rate":"amber","quiz_learning_delta":"amber","optional_resource_access_rate":"red","feedback_uptake_lag_hours":"orange"}',
+  '{"source":"xapi_lrs","quiz_attempts":[{"attempt":1,"score":50.0},{"attempt":2,"score":60.0}],"resources_revisited":{"week4_oop_intro":3,"week5_classes":2}}',
+  '2026-02-22T01:05:45Z'),
+
+-- David Kim (p4) W7
+('cs_p4_w7','p4','course1',7, 3.60,TRUE, 44.0,57.0,0.2321, NULL,0,0,0,0.0000,0.0000,144,
+  '{"quiz_learning_delta":0.5385,"optional_resource_access_rate":1.000,"feedback_uptake_lag_hours":0.667}',
+  '{"content_revisit_rate":"red","quiz_learning_delta":"amber","optional_resource_access_rate":"red","feedback_uptake_lag_hours":"orange"}',
+  '{"source":"xapi_lrs","quiz_attempts":[{"attempt":1,"score":44.0},{"attempt":2,"score":57.0}],"resources_revisited":{"week6_oop_advanced":5,"week5_classes":4}}',
+  '2026-03-08T01:05:45Z'),
+
+-- Henry Adams (p8) W3
+('cs_p8_w3','p8','course1',3, 1.05,FALSE,68.0,81.0,0.4063, 74.0,198,2,6,0.8000,0.4000,10,
+  '{"quiz_learning_delta":0.00,"discussion_depth_score":0.00,"optional_resource_access_rate":0.00,"peer_response_rate":0.00,"feedback_uptake_lag_hours":0.00}',
+  '{"content_revisit_rate":"green","quiz_learning_delta":"green","discussion_depth_score":"green","optional_resource_access_rate":"green","peer_response_rate":"green","feedback_uptake_lag_hours":"green"}',
+  '{"source":"xapi_lrs","quiz_attempts":[{"attempt":1,"score":68.0},{"attempt":2,"score":81.0}],"forum_posts":[{"post_id":"post_p8_1","word_count":198,"question_count":2,"response_count":3}]}',
+  '2026-02-08T01:05:45Z'),
+
+-- Henry Adams (p8) W5
+('cs_p8_w5','p8','course1',5, 2.50,FALSE,42.0,52.0,0.1724, NULL,0,0,0,0.0000,0.0000,120,
+  '{"quiz_learning_delta":0.714,"optional_resource_access_rate":1.000,"peer_response_rate":1.000,"feedback_uptake_lag_hours":0.800}',
+  '{"content_revisit_rate":"amber","quiz_learning_delta":"red","optional_resource_access_rate":"red","peer_response_rate":"red","feedback_uptake_lag_hours":"red"}',
+  '{"source":"xapi_lrs","quiz_attempts":[{"attempt":1,"score":42.0}],"resources_revisited":{"week5_oop_intro":3}}',
+  '2026-02-22T01:05:45Z'),
+
+-- Henry Adams (p8) W7
+('cs_p8_w7','p8','course1',7, 4.20,TRUE, 38.0,47.0,0.1452, NULL,0,0,0,0.0000,0.0000,168,
+  '{"quiz_learning_delta":0.823,"optional_resource_access_rate":1.000,"peer_response_rate":1.000,"feedback_uptake_lag_hours":1.000}',
+  '{"content_revisit_rate":"red","quiz_learning_delta":"red","optional_resource_access_rate":"red","peer_response_rate":"red","feedback_uptake_lag_hours":"red"}',
+  '{"source":"xapi_lrs","quiz_attempts":[{"attempt":1,"score":38.0}],"resources_revisited":{"week7_functions_intro":5,"week6_oop":4}}',
+  '2026-03-08T01:05:45Z'),
+
+-- Frank Lee (p6) W5
+('cs_p6_w5','p6','course1',5, 2.80,FALSE,48.0,61.0,0.2500, NULL,0,0,0,0.0000,0.1667,72,
+  '{"quiz_learning_delta":0.4615,"optional_resource_access_rate":0.8197,"feedback_uptake_lag_hours":0.5000,"peer_response_rate":0.00}',
+  '{"content_revisit_rate":"amber","quiz_learning_delta":"amber","optional_resource_access_rate":"orange","feedback_uptake_lag_hours":"amber"}',
+  '{"source":"xapi_lrs","quiz_attempts":[{"attempt":1,"score":48.0},{"attempt":2,"score":55.0},{"attempt":3,"score":61.0}],"resources_revisited":{"week5_functions_notes":3,"week5_examples":2}}',
+  '2026-02-22T01:05:45Z'),
+
+-- Bob Martinez (p2) W5
+('cs_p2_w5','p2','course1',5, 1.40,FALSE,65.0,78.0,0.3714, 61.0,155,1,4,0.5000,0.4286,24,
+  '{"quiz_learning_delta":0.077,"discussion_depth_score":0.00,"optional_resource_access_rate":0.2296,"peer_response_rate":0.500,"feedback_uptake_lag_hours":0.200}',
+  '{"content_revisit_rate":"green","quiz_learning_delta":"amber","discussion_depth_score":"amber","optional_resource_access_rate":"amber","feedback_uptake_lag_hours":"green"}',
+  '{"source":"xapi_lrs","quiz_attempts":[{"attempt":1,"score":65.0},{"attempt":2,"score":78.0}],"forum_posts":[{"post_id":"post_p2_5","word_count":155,"question_count":1,"response_count":1}]}',
+  '2026-02-22T01:05:45Z')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: emotional_signals  (L3)
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO emotional_signals (id, learner_id, course_id, week_number, pulse_confidence, pulse_energy, pulse_composite, pulse_submitted, pulse_submitted_at, mood_drift_score, mood_drift_flag, help_seeking_rate, messages_to_facilitator, forum_questions_asked, feedback_response_lag_hours, voluntary_engagement_rate, voluntary_engagement_delta, badge_earned_this_week, badge_response_delta, colour_flags, raw_data, computed_at) VALUES
+-- David Kim (p4) W3
+('es_p4_w3','p4','course1',3, 4,4,4.00,TRUE,'2026-02-02T08:50:00Z',NULL, FALSE,0.30,1,1,12, 0.5000,NULL, FALSE,NULL,
+  '{"pulse_composite":"green","help_seeking_rate":"green","voluntary_engagement_rate":"green"}',
+  '{"pulse_widget_session_id":"pulse_w3_p4","lms_messages_sent":1,"cohort_help_seeking_avg":0.32}',
+  '2026-02-08T01:06:00Z'),
+
+-- David Kim (p4) W5
+('es_p4_w5','p4','course1',5, 2,2,2.00,TRUE,'2026-02-16T09:15:00Z',3.20,TRUE, 0.05,0,0,96,  0.0000,-0.5000,FALSE,NULL,
+  '{"pulse_composite":"red","mood_drift_score":"amber","help_seeking_rate":"orange","voluntary_engagement_delta":"red"}',
+  '{"pulse_widget_session_id":"pulse_w5_p4","lms_messages_sent":0,"cohort_help_seeking_avg":0.31}',
+  '2026-02-22T01:06:00Z'),
+
+-- David Kim (p4) W7
+('es_p4_w7','p4','course1',7, 1,2,1.50,TRUE,'2026-03-02T09:05:00Z',2.65,TRUE, 0.05,0,0,144, 0.0000,-0.1667,FALSE,NULL,
+  '{"pulse_composite":"red","mood_drift_score":"red","help_seeking_rate":"orange","voluntary_engagement_rate":"red"}',
+  '{"pulse_widget_session_id":"pulse_w7_p4","lms_messages_sent":0,"cohort_help_seeking_avg":0.30}',
+  '2026-03-08T01:06:00Z'),
+
+-- Henry Adams (p8) W3
+('es_p8_w3','p8','course1',3, 4,3,3.50,TRUE,'2026-02-02T08:45:00Z',NULL, FALSE,0.40,1,2,10,  0.4000,NULL, TRUE, 0.1500,
+  '{"pulse_composite":"green","help_seeking_rate":"green","voluntary_engagement_rate":"green"}',
+  '{"pulse_widget_session_id":"pulse_w3_p8","lms_messages_sent":1,"badge_awarded":{"badge_id":"active_collaborator","awarded_at":"2026-02-04T12:00:00Z"},"pre_badge_access_48h":3,"post_badge_access_48h":4}',
+  '2026-02-08T01:06:00Z'),
+
+-- Henry Adams (p8) W5
+('es_p8_w5','p8','course1',5, 2,2,2.00,TRUE,'2026-02-16T09:20:00Z',2.90,TRUE, 0.08,0,0,120, 0.0000,-0.4000,FALSE,NULL,
+  '{"pulse_composite":"red","mood_drift_score":"red","help_seeking_rate":"red","voluntary_engagement_delta":"red"}',
+  '{"pulse_widget_session_id":"pulse_w5_p8","lms_messages_sent":0,"cohort_help_seeking_avg":0.38}',
+  '2026-02-22T01:06:00Z'),
+
+-- Henry Adams (p8) W7
+('es_p8_w7','p8','course1',7, 1,1,1.00,TRUE,'2026-03-02T09:10:00Z',1.85,TRUE, 0.03,0,0,168, 0.0000,-0.1667,FALSE,NULL,
+  '{"pulse_composite":"red","mood_drift_score":"red","help_seeking_rate":"red","voluntary_engagement_rate":"red"}',
+  '{"pulse_widget_session_id":"pulse_w7_p8","lms_messages_sent":0,"cohort_help_seeking_avg":0.35}',
+  '2026-03-08T01:06:00Z'),
+
+-- Frank Lee (p6) W5
+('es_p6_w5','p6','course1',5, 2,3,2.50,TRUE,'2026-02-16T09:12:00Z',3.20,TRUE, 0.12,0,0,72,  0.1667,-0.4583,FALSE,NULL,
+  '{"pulse_composite":"orange","mood_drift_score":"amber","help_seeking_rate":"amber","voluntary_engagement_delta":"orange"}',
+  '{"pulse_widget_session_id":"pulse_w5_p6","lms_messages_sent":0,"cohort_help_seeking_avg":0.38}',
+  '2026-02-22T01:06:00Z'),
+
+-- Bob Martinez (p2) W5
+('es_p2_w5','p2','course1',5, 3,4,3.50,TRUE,'2026-02-16T08:58:00Z',3.60,FALSE,0.28,0,1,24,  0.4286,-0.1200,FALSE,NULL,
+  '{"pulse_composite":"green","mood_drift_score":"green","help_seeking_rate":"green","voluntary_engagement_delta":"green"}',
+  '{"pulse_widget_session_id":"pulse_w5_p2","lms_messages_sent":0,"cohort_help_seeking_avg":0.38}',
+  '2026-02-22T01:06:00Z')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: risk_scores  (RE)
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO risk_scores (id, learner_id, course_id, week_number, profile_type, l1_contribution, l2_contribution, l3_contribution, primary_score, secondary_score, final_score, previous_week_score, score_delta, tier, anomaly_flag, signal_breakdown, facilitator_notes_prompt, computed_at) VALUES
+-- Alice Thompson (p1) W7 — on track
+('rs_p1_w7','p1','course1',7,'H',1.2,2.8,4.5,8.5,NULL,8.5, 7.2,1.3, 0,FALSE,
+  '{"quiz_learning_delta":{"raw":0.571,"normalised":0.00,"weight":0.15,"contribution":0.00,"colour":"green"},"optional_resource_access_rate":{"raw":0.75,"normalised":0.00,"weight":0.20,"contribution":0.00,"colour":"green"},"pulse_composite":{"raw":4.5,"normalised":0.00,"weight":0.20,"contribution":0.00,"colour":"green"}}',
+  'Alice (H-profile) performing well. High optional resource access, strong quiz improvement, positive pulse. No action required.',
+  '2026-03-08T01:06:30Z'),
+
+-- Bob Martinez (p2) W7 — monitoring
+('rs_p2_w7','p2','course1',7,'H',3.3,7.8,7.1,18.2,NULL,18.2, 12.4,5.8, 0,FALSE,
+  '{"quiz_learning_delta":{"raw":0.371,"normalised":0.077,"weight":0.15,"contribution":1.15,"colour":"amber"},"optional_resource_access_rate":{"raw":0.4286,"normalised":0.2296,"weight":0.20,"contribution":4.59,"colour":"amber"},"pulse_composite":{"raw":3.5,"normalised":0.00,"weight":0.20,"contribution":0.00,"colour":"green"},"login_frequency":{"raw":4,"normalised":0.00,"weight":0.10,"contribution":0.00,"colour":"green"}}',
+  'Bob (H-profile) monitoring. Quiz delta borderline, optional access slightly below W3 baseline. No intervention required. Review W8.',
+  '2026-03-08T01:06:30Z'),
+
+-- Carol White (p3) W7 — on track
+('rs_p3_w7','p3','course1',7,'T',0.5,2.1,2.6,5.2,NULL,5.2, 4.8,0.4, 0,FALSE,
+  '{"quiz_learning_delta":{"raw":0.588,"normalised":0.00,"weight":0.15,"contribution":0.00,"colour":"green"},"optional_resource_access_rate":{"raw":0.80,"normalised":0.00,"weight":0.20,"contribution":0.00,"colour":"green"}}',
+  'Carol (T-profile) on track. Consistently high performance. No action required.',
+  '2026-03-08T01:06:30Z'),
+
+-- David Kim (p4) W3 — calibration baseline
+('rs_p4_w3','p4','course1',3,'C',0.0,0.0,0.0,5.2,NULL,5.2, NULL,NULL,0,FALSE,
+  '{"quiz_learning_delta":{"raw":0.460,"normalised":0.00,"weight":0.15,"contribution":0.00,"colour":"green"},"pulse_composite":{"raw":4.0,"normalised":0.00,"weight":0.20,"contribution":0.00,"colour":"green"}}',
+  'David (C-profile) performing well in W3. Calibration period complete. Baseline established.',
+  '2026-02-08T01:06:30Z'),
+
+-- David Kim (p4) W5 — T1 AMBER ANOMALY
+('rs_p4_w5','p4','course1',5,'C',8.2,27.5,26.9,42.6,NULL,42.6, 5.2,37.4, 1,TRUE,
+  '{"optional_resource_access_rate":{"raw":0.000,"normalised":1.000,"weight":0.20,"contribution":20.00,"colour":"red"},"quiz_learning_delta":{"raw":0.200,"normalised":0.538,"weight":0.15,"contribution":8.08,"colour":"amber"},"mood_drift_score":{"raw":3.20,"normalised":0.360,"weight":0.20,"contribution":7.20,"colour":"amber"},"voluntary_engagement_delta":{"raw":-0.500,"normalised":1.000,"weight":0.15,"contribution":15.00,"colour":"red"},"login_frequency":{"raw":2,"normalised":0.667,"weight":0.10,"contribution":6.67,"colour":"amber"},"feedback_uptake_lag_hours":{"raw":96,"normalised":0.640,"weight":0.10,"contribution":6.40,"colour":"orange"},"forum_post_rate":{"raw":0.000,"normalised":1.000,"weight":0.00,"contribution":0.00,"colour":"red","note":"C-profile: not scored here"}}',
+  'ANOMALY: David (C-profile) score spiked +37.4pts. Optional resource access at 0%, voluntary engagement dropped 50%, quiz struggling. T1 auto-nudge queued. Facilitator review recommended within 48hrs.',
+  '2026-02-22T01:06:30Z'),
+
+-- David Kim (p4) W7 — T2 ORANGE
+('rs_p4_w7','p4','course1',7,'C',9.8,28.9,25.4,64.1,NULL,64.1, 42.6,21.5, 2,TRUE,
+  '{"optional_resource_access_rate":{"raw":0.000,"normalised":1.000,"weight":0.20,"contribution":20.00,"colour":"red"},"quiz_learning_delta":{"raw":0.232,"normalised":0.539,"weight":0.15,"contribution":8.08,"colour":"amber"},"mood_drift_score":{"raw":2.65,"normalised":0.633,"weight":0.20,"contribution":12.67,"colour":"red"},"voluntary_engagement_delta":{"raw":-0.167,"normalised":0.334,"weight":0.15,"contribution":5.00,"colour":"amber"},"time_on_task_hours":{"raw":1.8,"normalised":0.500,"weight":0.10,"contribution":5.00,"colour":"orange"},"login_frequency":{"raw":2,"normalised":0.667,"weight":0.10,"contribution":6.67,"colour":"amber"},"feedback_uptake_lag_hours":{"raw":144,"normalised":0.667,"weight":0.10,"contribution":6.67,"colour":"orange"}}',
+  'TIER 2 — ACTION WITHIN 48HRS. David (C-profile): optional access 0%, pulse 1.5/5, confirmed mood drift 29% below baseline, revisit flag on 2 resources. T1 sent W5 with no recovery. Pedagogical + structured outreach recommended.',
+  '2026-03-08T01:06:30Z'),
+
+-- Frank Lee (p6) W5 — T1 AMBER ANOMALY
+('rs_p6_w5','p6','course1',5,'T',4.9,19.2,18.5,42.6,NULL,42.6, 18.2,24.4, 1,TRUE,
+  '{"optional_resource_access_rate":{"raw":0.167,"normalised":0.820,"weight":0.20,"contribution":16.39,"colour":"orange"},"quiz_learning_delta":{"raw":0.250,"normalised":0.462,"weight":0.15,"contribution":6.92,"colour":"amber"},"mood_drift_score":{"raw":3.20,"normalised":0.360,"weight":0.20,"contribution":7.20,"colour":"amber"},"voluntary_engagement_delta":{"raw":-0.458,"normalised":0.917,"weight":0.15,"contribution":13.75,"colour":"orange"},"login_frequency":{"raw":3,"normalised":0.333,"weight":0.10,"contribution":3.33,"colour":"amber"},"feedback_uptake_lag_hours":{"raw":72,"normalised":0.500,"weight":0.10,"contribution":5.00,"colour":"amber"}}',
+  'ANOMALY: Frank (T-profile) score +24.4pts. Optional resource access dropped 46%, quiz plateauing after 3 attempts. T1 auto-nudge queued.',
+  '2026-02-22T01:06:30Z'),
+
+-- Henry Adams (p8) W3 — calibration baseline
+('rs_p8_w3','p8','course1',3,'A',0.0,0.0,0.0,6.1,NULL,6.1, NULL,NULL,0,FALSE,
+  '{}',
+  'Henry (A-profile) engaged in W3. Active forum participation, positive pulse. No action required.',
+  '2026-02-08T01:06:30Z'),
+
+-- Henry Adams (p8) W5 — T2 CRITICAL ANOMALY
+('rs_p8_w5','p8','course1',5,'A',11.2,28.5,24.4,64.1,NULL,64.1, 6.1,58.0, 2,TRUE,
+  '{"forum_post_rate":{"raw":0.000,"normalised":1.000,"weight":0.20,"contribution":20.00,"colour":"red","note":"A-profile: highest weight"},"peer_response_rate":{"raw":0.000,"normalised":1.000,"weight":0.15,"contribution":15.00,"colour":"red"},"quiz_learning_delta":{"raw":0.172,"normalised":0.714,"weight":0.15,"contribution":10.71,"colour":"red"},"mood_drift_score":{"raw":2.90,"normalised":0.290,"weight":0.20,"contribution":5.80,"colour":"red"},"voluntary_engagement_delta":{"raw":-0.400,"normalised":0.800,"weight":0.15,"contribution":12.00,"colour":"red"},"login_frequency":{"raw":2,"normalised":0.500,"weight":0.10,"contribution":5.00,"colour":"amber"},"feedback_uptake_lag_hours":{"raw":120,"normalised":0.800,"weight":0.10,"contribution":8.00,"colour":"red"}}',
+  'CRITICAL ANOMALY: Henry (A-profile) score +58pts. Zero forum activity (key A-profile indicator), zero peer responses, quiz at single attempt, mood drift confirmed. Immediate pastoral outreach.',
+  '2026-02-22T01:06:30Z'),
+
+-- Henry Adams (p8) W7 — T3 RED
+('rs_p8_w7','p8','course1',7,'A',14.2,32.1,32.2,78.5,NULL,78.5, 64.1,14.4, 3,TRUE,
+  '{"forum_post_rate":{"raw":0.000,"normalised":1.000,"weight":0.20,"contribution":20.00,"colour":"red"},"peer_response_rate":{"raw":0.000,"normalised":1.000,"weight":0.15,"contribution":15.00,"colour":"red"},"quiz_learning_delta":{"raw":0.145,"normalised":0.823,"weight":0.15,"contribution":12.35,"colour":"red"},"mood_drift_score":{"raw":1.85,"normalised":0.630,"weight":0.20,"contribution":12.60,"colour":"red"},"voluntary_engagement_delta":{"raw":-0.167,"normalised":0.333,"weight":0.15,"contribution":5.00,"colour":"amber"},"login_frequency":{"raw":1,"normalised":0.833,"weight":0.10,"contribution":8.33,"colour":"red"},"feedback_uptake_lag_hours":{"raw":168,"normalised":1.000,"weight":0.10,"contribution":10.00,"colour":"red"}}',
+  'TIER 3 CRITICAL: Henry (A-profile) 78.5/100. Full disengagement from all A-profile signals. Pastoral + academic intervention within 24hrs. Escalate to student support.',
+  '2026-03-08T01:06:30Z')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: interventions  (IE)
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO interventions (id, learner_id, course_id, facilitator_id, week_number, tier, trigger_score, profile_type, channel, template_id, message_body, sent_at, score_at_t7, score_at_t14, outcome, cooldown_expires_at, notes) VALUES
+
+('iv_p6_w5','p6','course1',NULL,5, 1,42.6,'T','lms_message','T_T1_nudge',
+  'Hi Frank — we noticed this week has been a bit quieter than usual in the course. Topic 5 is one of the more challenging sections, and we can see you''ve been working through the quiz multiple times — that persistence is great. It might be worth reviewing the structured example problems in the Week 5 resources before your next attempt. Your learning contract targets are still within reach. Let us know if there''s anything we can clarify.',
+  '2026-02-17T08:00:00Z', 38.2,35.1,'partial_recovery','2026-02-24T08:00:00Z',
+  'Auto-generated T1 T-profile nudge. Score showed slight improvement at T+7 and T+14. Partial recovery. No escalation required.'),
+
+('iv_p4_w5','p4','course1',NULL,5, 1,42.6,'C','lms_message','C_T1_structured_nudge',
+  'Hi David — we want to make sure you''re on track with your course goals. It looks like Week 5 has been a difficult one — the OOP content is genuinely complex. We''ve added a structured revision checklist to your dashboard that maps to the quiz outcomes. Your weekly schedule and milestone targets are also visible in your learning plan. If you''d like to speak with your instructor, office hours are available Thursday 2–4pm. Let us know how we can help you stay on track.',
+  '2026-02-17T08:05:00Z', 48.1,52.8,'no_change','2026-02-24T08:05:00Z',
+  'Auto T1 C-profile nudge. Score continued to rise at T+7 and T+14. No recovery. Escalated to T2 at W7.'),
+
+('iv_p4_w7','p4','course1','user1',7, 2,64.1,'C','lms_message','C_T2_pedagogical',
+  'Hi David — I wanted to check in personally. I can see Topics 5 and 6 have been really tough, and you''ve been revisiting a lot of the core material. That tells me you''re trying — and that matters. I''d love to have a short conversation to understand what''s feeling unclear and to see if the way the content is structured is working for you. I''ve also extended your Week 6 assignment deadline by 5 days — that''s reflected in your dashboard now. Can we arrange a 15-minute call this week? Let me know what time works best.',
+  '2026-03-02T10:30:00Z', NULL,NULL,NULL,NULL,
+  'T2 facilitator outreach. C-profile tone: structured, concrete offer (deadline extension), direct meeting request. Awaiting learner response.'),
+
+('iv_p8_w5','p8','course1',NULL,5, 2,64.1,'A','lms_message','A_T2_social_outreach',
+  'Hi Henry — I''ve noticed it''s been quieter from you in the course this week, and I just wanted to check in. The group discussion for Topic 5 is still open — your perspective on the ethics case study would be really valuable to your peers. A few students have been asking questions in the forum that are right in your wheelhouse. If you''ve been finding things difficult or just haven''t had the headspace, that''s completely okay — just let me know and we can work something out together.',
+  '2026-02-17T08:10:00Z', 68.2,72.1,'no_change','2026-02-24T08:10:00Z',
+  'Auto T2 A-profile social nudge. No forum response, no peer engagement. Score worsened. Escalated to T3.'),
+
+('iv_p8_w7','p8','course1','user1',7, 3,78.5,'A','video_call','A_T3_pastoral',
+  'Hi Henry — I''m reaching out because I''m genuinely concerned and want to understand how you''re doing. This isn''t about grades or deadlines — I just want to have a real conversation. I''ve arranged a video call for this Thursday at 11am (calendar invite sent). If that doesn''t work, please message me and we''ll find another time. You''re not in trouble — I just want to make sure you''re okay and that you feel supported.',
+  '2026-03-02T10:00:00Z', NULL,NULL,NULL,NULL,
+  'TIER 3 pastoral escalation. A-profile: led with care, not performance. Video call scheduled. Student support services also notified.')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: feedback_evaluations  (FL)
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO feedback_evaluations (id, intervention_id, learner_id, course_id, evaluated_at_week, score_before, score_at_t7, score_at_t14, score_delta_t7, score_delta_t14, recovery_threshold_met, outcome_label, re_threshold_adjustment, model_notes) VALUES
+
+('fe1','iv_p6_w5','p6','course1',7, 42.6,38.2,35.1, -4.4,-7.5, TRUE, 'partial_recovery',NULL,
+  'T-profile T1 nudge: partial recovery observed. Quiz attempt frequency increased, optional resources up to 33%. Score trending down. No RE adjustment needed — T1 T-profile template effective for this risk band.'),
+
+('fe2','iv_p4_w5','p4','course1',7, 42.6,48.1,52.8, 5.5,10.2, FALSE,'worsened',
+  '{"profile":"C","recommendation":"Reduce T1 trigger from 40 to 35 for C-profile","rationale":"C-profile learners deteriorate faster than H-profile — earlier T1 trigger improves intervention window"}',
+  'C-profile T1 message insufficient. Score rose +10.2pts over 14 days. RE calibration: C-profile T1 at 35, T2 human outreach mandatory at 50.'),
+
+('fe3','iv_p8_w5','p8','course1',7, 64.1,68.2,72.1, 4.1,8.0, FALSE,'escalated',
+  '{"profile":"A","recommendation":"Add pastoral_referral to A-profile T2 channel","rationale":"A-profile learners with zero forum activity for 2+ weeks need voice contact, not LMS message"}',
+  'A-profile T2 message: no response, score worsened. RE: A-profile + zero_forum_2wks = automatic T3 escalation flag.')
+ON CONFLICT (id) DO NOTHING;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+-- SEED: profile_drift_logs  (FL)
+-- ─────────────────────────────────────────────────────────────────────────────
+INSERT INTO profile_drift_logs (id, learner_id, course_id, detected_at_week, declared_profile, observed_pattern, drift_direction, drift_severity, drift_confirmed_at, facilitator_alerted, resolution, resolved_at, notes) VALUES
+
+('pd1','p4','course1',5,'C',
+  'C-profile fully withdrawn from structured pathways — no weekly roadmap access, all deadlines missed, zero cohort interaction. Behaviour more consistent with disengagement than any profile type.',
+  'C → disengaged (no profile match)',
+  'moderate','2026-02-22T01:07:00Z',TRUE,NULL,NULL,
+  'Drift flag set in learner_profiles. RE now applies disengaged-student signal weights (equal weighting across L1/L2/L3). Profile re-declaration offered at W9.'),
+
+('pd2','p8','course1',5,'A',
+  'A-profile completely withdrawn from all social signals — 0 forum posts, 0 peer responses, 0 messages to facilitator for 2 consecutive weeks. This is the antithesis of declared A-profile behaviour.',
+  'A → isolated (inverse of declared profile)',
+  'severe','2026-02-22T01:07:00Z',TRUE,NULL,NULL,
+  'Severe A-profile drift is highest-risk indicator in the system. RE triggers automatic T3 escalation when A-profile drift is severe + pulse < 2.0. Student support notified.'),
+
+('pd3','p6','course1',5,'T',
+  'T-profile showing reduced task completion and submission delays. Still partially matching declared profile — time-on-task adequate, structured navigation maintained.',
+  'T → partially disengaged (mild signal degradation)',
+  'mild','2026-02-22T01:07:00Z',TRUE,'partial_recovery','2026-03-08T01:07:00Z',
+  'Mild T-profile drift. T1 nudge effective in partial recovery. Drift flag removed at W7 after signals improved. Profile re-declaration not required.')
+ON CONFLICT (id) DO NOTHING;
+
+-- =============================================================================
+-- =============================================================================
+--  UTILITY VIEWS
+-- =============================================================================
+-- =============================================================================
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  VIEW: v_current_risk_status
+--  Returns the most recent risk score row per learner per course.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW v_current_risk_status AS
+SELECT DISTINCT ON (rs.learner_id, rs.course_id)
+    rs.learner_id,
+    u.name              AS learner_name,
+    rs.course_id,
+    c.name              AS course_name,
+    rs.week_number      AS latest_week,
+    rs.profile_type,
+    lp.primary_profile,
+    lp.secondary_profile,
+    lp.drift_flag       AS profile_drift_flag,
+    rs.final_score,
+    rs.previous_week_score,
+    rs.score_delta,
+    rs.tier,
+    rs.anomaly_flag,
+    rs.facilitator_notes_prompt,
+    rs.computed_at
+FROM risk_scores rs
+JOIN users            u  ON u.id  = rs.learner_id
+JOIN courses          c  ON c.id  = rs.course_id
+LEFT JOIN learner_profiles lp ON lp.learner_id = rs.learner_id
+                              AND lp.course_id  = rs.course_id
+ORDER BY rs.learner_id, rs.course_id, rs.week_number DESC;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  VIEW: v_at_risk_action_required
+--  Returns all learners currently at Tier 1+ with pending intervention status.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW v_at_risk_action_required AS
+SELECT
+    crs.learner_name,
+    crs.course_name,
+    crs.profile_type,
+    crs.final_score,
+    crs.score_delta,
+    crs.tier,
+    CASE crs.tier
+        WHEN 1 THEN 'AMBER  — Monitor / Auto-nudge'
+        WHEN 2 THEN 'ORANGE — Facilitator outreach within 48hrs'
+        WHEN 3 THEN 'RED    — Immediate pastoral escalation'
+    END AS action_label,
+    crs.anomaly_flag,
+    crs.profile_drift_flag,
+    crs.facilitator_notes_prompt,
+    iv.id           AS latest_intervention_id,
+    iv.tier         AS intervention_tier,
+    iv.channel      AS intervention_channel,
+    iv.sent_at      AS intervention_sent_at,
+    iv.outcome      AS intervention_outcome
+FROM v_current_risk_status crs
+LEFT JOIN LATERAL (
+    SELECT * FROM interventions
+    WHERE learner_id = crs.learner_id
+      AND course_id  = crs.course_id
+    ORDER BY created_at DESC
+    LIMIT 1
+) iv ON TRUE
+WHERE crs.tier >= 1
+ORDER BY crs.tier DESC, crs.final_score DESC;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  VIEW: v_gradebook
+--  Pivots grade data for the Gradebook UI component.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW v_gradebook AS
+SELECT
+    sg.student_id,
+    sg.student_name,
+    gi.course_id,
+    gi.id           AS grade_item_id,
+    gi.activity_name,
+    gi.activity_type,
+    gi.grade_max,
+    sg.grade,
+    sg.percentage,
+    sg.status,
+    sg.feedback,
+    sg.submitted_date
+FROM student_grades sg
+JOIN grade_items     gi ON gi.id = sg.grade_item_id
+ORDER BY sg.student_name, gi.id;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  VIEW: v_course_summary
+--  Dashboard / admin overview of all courses with key metrics.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW v_course_summary AS
+SELECT
+    c.id,
+    c.name,
+    c.short_name,
+    c.status,
+    c.visibility,
+    c.format,
+    c.start_date,
+    c.end_date,
+    c.instructor_name,
+    c.enrolled_students,
+    c.category_name,
+    COUNT(DISTINCT s.id)    AS section_count,
+    COUNT(DISTINCT a.id)    AS activity_count
+FROM courses   c
+LEFT JOIN sections  s ON s.course_id = c.id
+LEFT JOIN activities a ON a.course_id = c.id
+GROUP BY c.id, c.name, c.short_name, c.status, c.visibility,
+         c.format, c.start_date, c.end_date, c.instructor_name,
+         c.enrolled_students, c.category_name
+ORDER BY c.status, c.name;
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  VIEW: v_learner_pipeline_summary
+--  Full pipeline view per learner per week: L0 + L1 + L2 + L3 + RE + IE.
+-- ─────────────────────────────────────────────────────────────────────────────
+CREATE OR REPLACE VIEW v_learner_pipeline_summary AS
+SELECT
+    rs.learner_id,
+    u.name                                      AS learner_name,
+    rs.course_id,
+    rs.week_number,
+    -- L0
+    lp.primary_profile,
+    lp.secondary_profile,
+    lp.is_mixed_profile,
+    lp.drift_flag                               AS l0_drift_flag,
+    -- L1
+    bs.login_frequency,
+    bs.time_on_task_hours,
+    bs.content_completion_rate,
+    bs.submission_timing,
+    bs.forum_post_count,
+    bs.navigation_pattern,
+    -- L2
+    cs.content_revisit_rate,
+    cs.revisit_flag,
+    cs.quiz_learning_delta,
+    cs.optional_resource_access_rate,
+    cs.feedback_uptake_lag_hours,
+    -- L3
+    es.pulse_composite,
+    es.mood_drift_score,
+    es.mood_drift_flag,
+    es.voluntary_engagement_rate,
+    es.voluntary_engagement_delta,
+    es.help_seeking_rate,
+    -- RE
+    rs.l1_contribution,
+    rs.l2_contribution,
+    rs.l3_contribution,
+    rs.final_score,
+    rs.previous_week_score,
+    rs.score_delta,
+    rs.tier,
+    rs.anomaly_flag,
+    rs.facilitator_notes_prompt,
+    -- IE
+    iv.id                                       AS intervention_id,
+    iv.tier                                     AS intervention_tier,
+    iv.channel                                  AS intervention_channel,
+    iv.template_id,
+    iv.sent_at                                  AS intervention_sent_at,
+    iv.outcome                                  AS intervention_outcome
+FROM risk_scores          rs
+JOIN users                u   ON u.id   = rs.learner_id
+LEFT JOIN learner_profiles lp  ON lp.learner_id = rs.learner_id AND lp.course_id  = rs.course_id
+LEFT JOIN behavioral_signals bs ON bs.learner_id = rs.learner_id AND bs.course_id = rs.course_id AND bs.week_number = rs.week_number
+LEFT JOIN cognitive_signals  cs ON cs.learner_id = rs.learner_id AND cs.course_id = rs.course_id AND cs.week_number = rs.week_number
+LEFT JOIN emotional_signals  es ON es.learner_id = rs.learner_id AND es.course_id = rs.course_id AND es.week_number = rs.week_number
+LEFT JOIN LATERAL (
+    SELECT * FROM interventions
+    WHERE learner_id = rs.learner_id
+      AND course_id  = rs.course_id
+      AND week_number = rs.week_number
+    ORDER BY created_at DESC LIMIT 1
+) iv ON TRUE
+ORDER BY rs.learner_id, rs.course_id, rs.week_number;
+
+-- =============================================================================
+-- END OF SCHEMA
+-- =============================================================================
+--
+--  SUMMARY
+--  ───────
+--  Tables:   30
+--  Views:     4  (v_current_risk_status, v_at_risk_action_required,
+--                 v_gradebook, v_course_summary, v_learner_pipeline_summary)
+--  Indexes:  50+
+--
+--  CORE LMS (Tables 1–22):
+--    users, categories, courses, sections, activities, enrollments,
+--    grade_items, student_grades, notifications, conversations, messages,
+--    quiz_questions, quiz_answers, ai_performance_snapshots, ai_skill_metrics,
+--    ai_at_risk_students, ai_recommendations, ai_content_recommendations,
+--    ai_generated_questions, user_preferences, activity_performance,
+--    dashboard_engagement
+--
+--  LEARNER ANALYTICS PIPELINE (Tables 23–30):
+--    learner_profiles (L0)       — declared HATC profile + LMS flags
+--    behavioral_signals (L1)     — weekly LMS log extraction
+--    cognitive_signals (L2)      — xAPI/LRS computed processing metrics
+--    emotional_signals (L3)      — pulse check-ins + mood drift computation
+--    risk_scores (RE)            — weighted aggregation → tier 0–3
+--    interventions (IE)          — tier-triggered templated outreach
+--    feedback_evaluations (FL)   — T+7 / T+14 outcome scoring
+--    profile_drift_logs (FL)     — behavioural divergence from L0 profile
+--
+-- =============================================================================

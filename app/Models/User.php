@@ -2,15 +2,20 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Laravel\Sanctum\HasApiTokens;
 
-class User extends Authenticatable
+class User extends Authenticatable implements MustVerifyEmail
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
-    use HasFactory, Notifiable;
+    use HasApiTokens, HasFactory, Notifiable;
+
+    public $incrementing = false;
+    protected $keyType   = 'string';
 
     /**
      * The attributes that are mass assignable.
@@ -21,6 +26,13 @@ class User extends Authenticatable
         'name',
         'email',
         'password',
+        'role',
+        'bio',
+        'department',
+        'institution',
+        'country',
+        'timezone',
+        'language',
     ];
 
     /**
@@ -44,5 +56,30 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
         ];
+    }
+
+    public function enrollments(): HasMany
+    {
+        return $this->hasMany(Enrollment::class);
+    }
+
+    public function courses(): HasMany
+    {
+        return $this->hasMany(Course::class, 'instructor_id');
+    }
+
+    public function notifications(): HasMany
+    {
+        return $this->hasMany(Notification::class);
+    }
+
+    public function conversations(): HasMany
+    {
+        return $this->hasMany(Conversation::class, 'owner_user_id');
+    }
+
+    public function preferences(): HasMany
+    {
+        return $this->hasMany(UserPreference::class);
     }
 }
