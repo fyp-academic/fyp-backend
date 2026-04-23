@@ -8,21 +8,21 @@ use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
-use App\Models\User;
 
 class EmailVerificationMail extends Mailable implements ShouldQueue
 {
     use Queueable, SerializesModels;
 
     public function __construct(
-        public readonly User   $user,
+        public readonly string $userName,
         public readonly string $verificationUrl,
+        public readonly string $expiresIn = '60 minutes',
     ) {}
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Verify your EduAI LMS email address',
+            subject: 'Verify your APES UDOM email address',
         );
     }
 
@@ -31,15 +31,15 @@ class EmailVerificationMail extends Mailable implements ShouldQueue
         return new Content(
             view: 'emails.email-verification',
             with: [
-                'userName'        => $this->user->name,
+                'userName'        => $this->userName,
                 'verificationUrl' => $this->verificationUrl,
-                'expiresIn'       => '60 minutes',
+                'expiresIn'       => $this->expiresIn,
             ],
         );
     }
 
     public function attachments(): array
-    {
+       {
         return [];
     }
 }

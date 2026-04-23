@@ -2,18 +2,45 @@
 
 namespace App\Models;
 
+use App\Mail\EmailVerificationMail;
 use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
+use Illuminate\Support\Facades\Mail;
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable implements MustVerifyEmail
 {
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasApiTokens, HasFactory, HasUuids, Notifiable;
+
+    /**
+     * Send the email verification notification.
+     */
+    public function sendEmailVerificationNotification(): void
+    {
+        $verificationUrl = $this->generateVerificationUrl();
+
+        Mail::to($this->email)->send(new EmailVerificationMail(
+            userName: $this->name,
+            verificationUrl: $verificationUrl,
+            expiresIn: '60 minutes'
+        ));
+    }
+
+    /**
+     * Generate the verification URL.
+     */
+    private function generateVerificationUrl(): string
+    {
+        return route('verification.verify', [
+            'id' => $this->getKey(),
+            'hash' => sha1($this->getEmailForVerification()),
+        ], false);
+    }
 
     public $incrementing = false;
     protected $keyType   = 'string';
