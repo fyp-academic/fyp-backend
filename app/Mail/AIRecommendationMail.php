@@ -2,13 +2,14 @@
 
 namespace App\Mail;
 
+use App\Models\User;
+use App\Services\EmailRenderingService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
-use App\Models\User;
 
 class AIRecommendationMail extends Mailable implements ShouldQueue
 {
@@ -40,16 +41,19 @@ class AIRecommendationMail extends Mailable implements ShouldQueue
 
     public function content(): Content
     {
+        $renderer = app(EmailRenderingService::class);
+
+        $html = $renderer->render('ai-recommendation', [
+            'userName'        => $this->user->name,
+            'courseName'      => $this->courseName,
+            'profileType'     => $this->profileType,
+            'riskTier'        => $this->riskTier,
+            'recommendations' => $this->recommendations,
+            'actionUrl'       => $this->actionUrl,
+        ]);
+
         return new Content(
-            view: 'emails.ai-recommendation',
-            with: [
-                'userName'        => $this->user->name,
-                'courseName'      => $this->courseName,
-                'profileType'     => $this->profileType,
-                'riskTier'        => $this->riskTier,
-                'recommendations' => $this->recommendations,
-                'actionUrl'       => $this->actionUrl,
-            ],
+            html: $html,
         );
     }
 

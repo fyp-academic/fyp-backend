@@ -2,13 +2,14 @@
 
 namespace App\Mail;
 
+use App\Models\User;
+use App\Services\EmailRenderingService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
-use App\Models\User;
 
 class CourseUpdateMail extends Mailable implements ShouldQueue
 {
@@ -50,17 +51,20 @@ class CourseUpdateMail extends Mailable implements ShouldQueue
 
     public function content(): Content
     {
+        $renderer = app(EmailRenderingService::class);
+
+        $html = $renderer->render('course-update', [
+            'studentName'  => $this->student->name,
+            'courseName'   => $this->courseName,
+            'updateType'   => $this->updateType,
+            'activityName' => $this->activityName,
+            'description'  => $this->description,
+            'dueDate'      => $this->dueDate,
+            'actionUrl'    => $this->actionUrl,
+        ]);
+
         return new Content(
-            view: 'emails.course-update',
-            with: [
-                'studentName'  => $this->student->name,
-                'courseName'   => $this->courseName,
-                'updateType'   => $this->updateType,
-                'activityName' => $this->activityName,
-                'description'  => $this->description,
-                'dueDate'      => $this->dueDate,
-                'actionUrl'    => $this->actionUrl,
-            ],
+            html: $html,
         );
     }
 

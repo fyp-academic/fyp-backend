@@ -10,6 +10,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\URL;
+
 use Laravel\Sanctum\HasApiTokens;
 
 class User extends Authenticatable implements MustVerifyEmail
@@ -22,24 +25,35 @@ class User extends Authenticatable implements MustVerifyEmail
      */
     public function sendEmailVerificationNotification(): void
     {
-        $verificationUrl = $this->generateVerificationUrl();
+        try {
+            $verificationUrl = $this->generateVerificationUrl();
 
-        Mail::to($this->email)->send(new EmailVerificationMail(
-            userName: $this->name,
-            verificationUrl: $verificationUrl,
-            expiresIn: '60 minutes'
-        ));
+            Log::info('Sending verification email to: ' . $this->email);
+            Log::info('Verification URL: ' . $verificationUrl);
+
+            Mail::to($this->email)->send(new EmailVerificationMail(
+                userName: $this->name,
+                verificationUrl: $verificationUrl,
+                expiresIn: '60 minutes'
+            ));
+
+            Log::info('Verification email sent successfully');
+        } catch (\Exception $e) {
+            Log::error('Failed to send verification email: ' . $e->getMessage());
+            Log::error($e->getTraceAsString());
+            throw $e;
+        }
     }
 
     /**
-     * Generate the verification URL.
+     * Generate the signed verification URL.
      */
     private function generateVerificationUrl(): string
     {
-        return route('verification.verify', [
+        return URL::signedRoute('verification.verify', [
             'id' => $this->getKey(),
             'hash' => sha1($this->getEmailForVerification()),
-        ], false);
+        ], now()->addMinutes(60));
     }
 
     public $incrementing = false;

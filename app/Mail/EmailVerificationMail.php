@@ -2,6 +2,7 @@
 
 namespace App\Mail;
 
+use App\Services\EmailRenderingService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
@@ -28,18 +29,21 @@ class EmailVerificationMail extends Mailable implements ShouldQueue
 
     public function content(): Content
     {
+        $renderer = app(EmailRenderingService::class);
+
+        $html = $renderer->render('email-verification', [
+            'userName'        => $this->userName,
+            'verificationUrl' => $this->verificationUrl,
+            'expiresIn'       => $this->expiresIn,
+        ]);
+
         return new Content(
-            view: 'emails.email-verification',
-            with: [
-                'userName'        => $this->userName,
-                'verificationUrl' => $this->verificationUrl,
-                'expiresIn'       => $this->expiresIn,
-            ],
+            html: $html,
         );
     }
 
     public function attachments(): array
-       {
+    {
         return [];
     }
 }

@@ -19,7 +19,20 @@ return [
     ],
 
     'resend' => [
-        'key' => env('RESEND_API_KEY'),
+        'key' => env('RESEND_KEY'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Email Renderer (React Frontend)
+    |--------------------------------------------------------------------------
+    |
+    | The URL of the React frontend dev server that provides the email
+    | rendering endpoint. This allows Laravel to render React email templates.
+    |
+    */
+    'email_renderer' => [
+        'url' => env('EMAIL_RENDERER_URL', 'http://localhost:5173'),
     ],
 
     'ses' => [
