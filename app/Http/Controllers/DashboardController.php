@@ -68,8 +68,10 @@ class DashboardController extends Controller
             ->limit(5)
             ->get();
 
+        $activeCount = $courses->where('status', 'active')->count();
+
         return response()->json([
-            'active_courses'        => $courses,
+            'active_courses'        => $activeCount,
             'total_enrollments'     => $totalEnrollments,
             'weekly_engagement'     => $engagement,
             'pending_grading_count' => $pendingGrades,

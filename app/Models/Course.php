@@ -14,7 +14,7 @@ class Course extends Model
     protected $fillable = [
         'id', 'name', 'short_name', 'description', 'category_id', 'category_name',
         'instructor_id', 'instructor_name', 'enrolled_students', 'status', 'visibility',
-        'format', 'start_date', 'end_date', 'language', 'tags', 'max_students',
+        'format', 'start_date', 'end_date', 'language', 'tags', 'max_students', 'image',
     ];
 
     protected function casts(): array

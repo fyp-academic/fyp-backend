@@ -9,6 +9,8 @@ use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
 use App\Models\Section;
 use App\Models\Activity;
+use App\Models\Enrollment;
+use App\Models\Notification;
 
 class ActivityController extends Controller
 {
@@ -24,6 +26,59 @@ class ActivityController extends Controller
             ->get();
 
         return response()->json(['data' => $activities, 'section_id' => $id]);
+    }
+
+    /**
+     * GET /api/v1/sections/{id}/activities (public)
+     * Return visible activities for enrolled students.
+     */
+    public function indexPublic(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $section = Section::findOrFail($id);
+        $course = \App\Models\Course::findOrFail($section->course_id);
+
+        // Check if user is enrolled
+        $isEnrolled = \App\Models\Enrollment::where('user_id', $user?->id)
+            ->where('course_id', $section->course_id)
+            ->exists();
+
+        if (!$isEnrolled && $course->visibility !== 'shown') {
+            return response()->json(['message' => 'Access denied.'], 403);
+        }
+
+        $activities = Activity::where('section_id', $id)
+            ->where('visible', true)
+            ->orderBy('sort_order')
+            ->get();
+
+        return response()->json(['data' => $activities, 'section_id' => $id]);
+    }
+
+    /**
+     * GET /api/v1/activities/{id} (public)
+     * Show a single activity for enrolled students.
+     */
+    public function showPublic(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $activity = Activity::findOrFail($id);
+        $course = \App\Models\Course::findOrFail($activity->course_id);
+
+        // Check if user is enrolled
+        $isEnrolled = \App\Models\Enrollment::where('user_id', $user?->id)
+            ->where('course_id', $activity->course_id)
+            ->exists();
+
+        if (!$isEnrolled && $course->visibility !== 'shown') {
+            return response()->json(['message' => 'Access denied.'], 403);
+        }
+
+        if (!$activity->visible) {
+            return response()->json(['message' => 'Activity not available.'], 403);
+        }
+
+        return response()->json(['data' => $activity]);
     }
 
     /**
@@ -65,6 +120,23 @@ class ActivityController extends Controller
             'sort_order'        => $request->input('sort_order', $maxOrder + 1),
             'settings'          => $request->input('settings'),
         ]);
+
+        // Notify enrolled students about new content
+        $enrolledStudents = Enrollment::where('course_id', $section->course_id)
+            ->where('role', 'student')
+            ->pluck('user_id');
+
+        foreach ($enrolledStudents as $studentId) {
+            Notification::create([
+                'id'      => Str::uuid()->toString(),
+                'user_id' => $studentId,
+                'title'   => 'New ' . ucfirst($request->type) . ' Added',
+                'message' => "A new {$request->type} '{$request->name}' has been added to your course.",
+                'type'    => 'course_update',
+                'data'    => json_encode(['course_id' => $section->course_id, 'activity_id' => $activity->id, 'activity_type' => $request->type]),
+                'read'    => false,
+            ]);
+        }
 
         return response()->json(['message' => 'Activity created.', 'data' => $activity], 201);
     }

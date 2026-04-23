@@ -2,6 +2,7 @@
 
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AuthController;
+use App\Http\Controllers\UserController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\CourseController;
 use App\Http\Controllers\SectionController;
@@ -40,7 +41,7 @@ Route::prefix('v1')->group(function () {
         Route::post('register',         [AuthController::class, 'register']);
         Route::post('login',            [AuthController::class, 'login']);
         Route::post('forgot-password',  [AuthController::class, 'forgotPassword']);
-        Route::post('reset-password',   [AuthController::class, 'resetPassword']);
+        Route::post('reset-password',   [AuthController::class, 'resetPassword'])->name('password.reset');
         Route::get('verify-email/{id}/{hash}', [AuthController::class, 'verifyEmail'])
             ->middleware(['signed'])
             ->name('verification.verify');
@@ -68,23 +69,41 @@ Route::prefix('v1')->group(function () {
         });
 
         // ─────────────────────────────────────────────────────────────────────
-        // COURSES & ENROLLMENT
+        // USERS (Admin or Instructor - view only; only Admin can create/manage)
         // ─────────────────────────────────────────────────────────────────────
-        Route::prefix('courses')->group(function () {
+        Route::middleware('admin.or.instructor')->get('/users', [UserController::class, 'index']);
+
+        // ─────────────────────────────────────────────────────────────────────
+        // PUBLIC COURSE CATALOG (for students to browse and self-enroll)
+        // ─────────────────────────────────────────────────────────────────────
+        Route::get('/courses/catalog', [CourseController::class, 'catalog']);
+        Route::get('/courses/{id}/public', [CourseController::class, 'publicShow']);
+        Route::get('/courses/{id}/sections', [SectionController::class, 'indexPublic']);
+        Route::post('/courses/{id}/join',   [CourseController::class, 'selfEnroll']);
+        Route::delete('/courses/{id}/leave', [CourseController::class, 'selfUnenroll']);
+        Route::get('/courses/{id}/my-grades', [GradeController::class, 'myGrades']);
+        Route::get('/categories', [CategoryController::class, 'index']);
+
+        // ─────────────────────────────────────────────────────────────────────
+        // SECTIONS & ACTIVITIES (Public for enrolled students)
+        // ─────────────────────────────────────────────────────────────────────
+        Route::get('/sections/{id}/activities', [ActivityController::class, 'indexPublic']);
+        Route::get('/activities/{id}', [ActivityController::class, 'showPublic']);
+
+        // ─────────────────────────────────────────────────────────────────────
+        // COURSES & ENROLLMENT (Admin or Instructor)
+        // ─────────────────────────────────────────────────────────────────────
+        Route::middleware('admin.or.instructor')->prefix('courses')->group(function () {
             Route::get('/',    [CourseController::class, 'index']);
             Route::post('/',   [CourseController::class, 'store']);
             Route::get('/{id}',    [CourseController::class, 'show']);
             Route::put('/{id}',    [CourseController::class, 'update']);
             Route::delete('/{id}', [CourseController::class, 'destroy']);
 
-            // Participants / Enrollment
+            // Participants / Enrollment (admin managed)
             Route::get('/{id}/participants',         [CourseController::class, 'participants']);
             Route::post('/{id}/enroll',              [CourseController::class, 'enroll']);
             Route::delete('/{id}/enroll/{userId}',   [CourseController::class, 'unenroll']);
-
-            // Student self-enrollment
-            Route::post('/{id}/join',   [CourseController::class, 'selfEnroll']);
-            Route::delete('/{id}/leave', [CourseController::class, 'selfUnenroll']);
 
             // Sections (nested under course)
             Route::get('/{id}/sections',                          [SectionController::class, 'index']);
@@ -129,7 +148,7 @@ Route::prefix('v1')->group(function () {
         // ─────────────────────────────────────────────────────────────────────
         // SECTIONS → ACTIVITIES  (top-level section access)
         // ─────────────────────────────────────────────────────────────────────
-        Route::prefix('sections/{id}')->group(function () {
+        Route::middleware('admin.or.instructor')->prefix('sections/{id}')->group(function () {
             Route::get('activities',  [ActivityController::class, 'index']);
             Route::post('activities', [ActivityController::class, 'store']);
         });
@@ -137,7 +156,7 @@ Route::prefix('v1')->group(function () {
         // ─────────────────────────────────────────────────────────────────────
         // ACTIVITIES  (standalone mutations)
         // ─────────────────────────────────────────────────────────────────────
-        Route::prefix('activities')->group(function () {
+        Route::middleware('admin.or.instructor')->prefix('activities')->group(function () {
             Route::put('/{id}',    [ActivityController::class, 'update']);
             Route::delete('/{id}', [ActivityController::class, 'destroy']);
 
@@ -216,10 +235,9 @@ Route::prefix('v1')->group(function () {
         });
 
         // ─────────────────────────────────────────────────────────────────────
-        // CATEGORIES
+        // CATEGORIES (Admin or Instructor - create/update/delete only)
         // ─────────────────────────────────────────────────────────────────────
-        Route::prefix('categories')->group(function () {
-            Route::get('/',    [CategoryController::class, 'index']);
+        Route::middleware('admin.or.instructor')->prefix('categories')->group(function () {
             Route::post('/',   [CategoryController::class, 'store']);
             Route::put('/{id}',    [CategoryController::class, 'update']);
             Route::delete('/{id}', [CategoryController::class, 'destroy']);

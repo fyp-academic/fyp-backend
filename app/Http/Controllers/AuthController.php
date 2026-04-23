@@ -40,12 +40,10 @@ class AuthController extends Controller
 
         event(new Registered($user));
 
-        $token = $user->createToken('api-token')->plainTextToken;
-
         return response()->json([
-            'message' => 'Account created. Please verify your email.',
+            'message' => 'Account created successfully. Please check your email to verify your account before logging in.',
             'user'    => $user,
-            'token'   => $token,
+            'requires_verification' => true,
         ], 201);
     }
 
@@ -68,7 +66,17 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid credentials.'], 401);
         }
 
-        $user  = Auth::user();
+        $user = Auth::user();
+
+        // Check if email is verified
+        if (!$user->hasVerifiedEmail()) {
+            return response()->json([
+                'message' => 'Please verify your email address before logging in.',
+                'requires_verification' => true,
+                'email' => $user->email,
+            ], 403);
+        }
+
         $token = $user->createToken('api-token')->plainTextToken;
 
         return response()->json([

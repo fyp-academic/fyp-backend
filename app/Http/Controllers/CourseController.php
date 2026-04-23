@@ -19,7 +19,7 @@ class CourseController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Course::with(['category', 'instructor']);
+        $query = Course::with(['category', 'instructor', 'sections.activities']);
 
         if ($request->filled('status')) {
             $query->where('status', $request->status);
@@ -39,8 +39,25 @@ class CourseController extends Controller
 
         $courses = $query->orderBy('created_at', 'desc')->paginate($request->input('per_page', 20));
 
+        // Transform to ensure instructor is a string name
+        $items = $courses->items();
+        $transformed = array_map(function ($course) {
+            $arr = $course->toArray();
+            if (isset($arr['instructor']) && is_array($arr['instructor'])) {
+                $arr['instructor'] = $arr['instructor']['name'] ?? $arr['instructor_name'] ?? 'Unknown';
+            }
+            if (!isset($arr['instructor']) || is_array($arr['instructor'])) {
+                $arr['instructor'] = $arr['instructor_name'] ?? 'Unknown';
+            }
+            // Ensure sections is always an array
+            if (!isset($arr['sections'])) {
+                $arr['sections'] = [];
+            }
+            return $arr;
+        }, $items);
+
         return response()->json([
-            'data' => $courses->items(),
+            'data' => $transformed,
             'meta' => [
                 'total'        => $courses->total(),
                 'per_page'     => $courses->perPage(),
@@ -48,6 +65,84 @@ class CourseController extends Controller
                 'last_page'    => $courses->lastPage(),
             ],
         ]);
+    }
+
+    /**
+     * GET /api/v1/courses/catalog
+     * Public catalog for students to browse visible courses.
+     */
+    public function catalog(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        // If enrolled=true, only show courses the user is enrolled in
+        if ($request->boolean('enrolled') && $user) {
+            $enrolledCourseIds = Enrollment::where('user_id', $user->id)
+                ->pluck('course_id')
+                ->toArray();
+
+            $query = Course::with(['category', 'instructor', 'sections'])
+                ->whereIn('id', $enrolledCourseIds);
+
+            $courses = $query->orderBy('created_at', 'desc')->get();
+
+            // Transform to ensure instructor is a string name and sections is array
+            $transformed = $courses->map(function ($course) use ($user) {
+                $arr = $course->toArray();
+                if (isset($arr['instructor']) && is_array($arr['instructor'])) {
+                    $arr['instructor'] = $arr['instructor']['name'] ?? $arr['instructor_name'] ?? 'Unknown';
+                }
+                if (!isset($arr['instructor']) || is_array($arr['instructor'])) {
+                    $arr['instructor'] = $arr['instructor_name'] ?? 'Unknown';
+                }
+                if (!isset($arr['sections'])) {
+                    $arr['sections'] = [];
+                }
+                $arr['is_enrolled'] = true; // All these are enrolled
+                return $arr;
+            });
+
+            return response()->json(['data' => $transformed]);
+        }
+
+        // Otherwise, show all visible/active courses (for catalog browsing)
+        $query = Course::with(['category', 'instructor', 'sections'])
+            ->where('visibility', 'shown')
+            ->where('status', 'active');
+
+        if ($request->filled('category_id')) {
+            $query->where('category_id', $request->category_id);
+        }
+        if ($request->filled('search')) {
+            $query->where(function ($q) use ($request) {
+                $q->where('name', 'ilike', "%{$request->search}%")
+                  ->orWhere('short_name', 'ilike', "%{$request->search}%");
+            });
+        }
+
+        $courses = $query->orderBy('created_at', 'desc')->get();
+
+        // Transform to ensure instructor is a string name and sections is array
+        $transformed = $courses->map(function ($course) use ($user) {
+            $arr = $course->toArray();
+            if (isset($arr['instructor']) && is_array($arr['instructor'])) {
+                $arr['instructor'] = $arr['instructor']['name'] ?? $arr['instructor_name'] ?? 'Unknown';
+            }
+            if (!isset($arr['instructor']) || is_array($arr['instructor'])) {
+                $arr['instructor'] = $arr['instructor_name'] ?? 'Unknown';
+            }
+            if (!isset($arr['sections'])) {
+                $arr['sections'] = [];
+            }
+            if ($user) {
+                $arr['is_enrolled'] = Enrollment::where('user_id', $user->id)
+                    ->where('course_id', $course->id)
+                    ->exists();
+            }
+            return $arr;
+        });
+
+        return response()->json(['data' => $transformed]);
     }
 
     /**
@@ -63,11 +158,13 @@ class CourseController extends Controller
             'category_id'   => 'required|string|exists:categories,id',
             'format'        => 'required|string|in:topics,weekly,social',
             'visibility'    => 'sometimes|string|in:shown,hidden',
+            'status'        => 'sometimes|string|in:draft,active,archived',
             'start_date'    => 'required|date',
             'end_date'      => 'required|date|after:start_date',
             'language'      => 'sometimes|string|max:50',
             'tags'          => 'sometimes|array',
             'max_students'  => 'sometimes|nullable|integer|min:1',
+            'image'         => 'sometimes|nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -76,6 +173,12 @@ class CourseController extends Controller
 
         $user     = $request->user();
         $category = Category::findOrFail($request->category_id);
+
+        // Determine status based on visibility if not provided
+        $status = $request->input('status');
+        if (!$status) {
+            $status = $request->input('visibility', 'shown') === 'shown' ? 'active' : 'draft';
+        }
 
         $course = Course::create([
             'id'                => Str::uuid()->toString(),
@@ -87,7 +190,7 @@ class CourseController extends Controller
             'instructor_id'     => $user->id,
             'instructor_name'   => $user->name,
             'enrolled_students' => 0,
-            'status'            => 'draft',
+            'status'            => $status,
             'visibility'        => $request->input('visibility', 'shown'),
             'format'            => $request->format,
             'start_date'        => $request->start_date,
@@ -95,11 +198,23 @@ class CourseController extends Controller
             'language'          => $request->input('language', 'English'),
             'tags'              => $request->input('tags', []),
             'max_students'      => $request->input('max_students'),
+            'image'             => $request->input('image'),
         ]);
 
-        $course->load(['category', 'instructor']);
+        $course->load(['category', 'instructor', 'sections.activities']);
 
-        return response()->json(['message' => 'Course created.', 'data' => $course], 201);
+        $arr = $course->toArray();
+        if (isset($arr['instructor']) && is_array($arr['instructor'])) {
+            $arr['instructor'] = $arr['instructor']['name'] ?? $arr['instructor_name'] ?? 'Unknown';
+        }
+        if (!isset($arr['instructor']) || is_array($arr['instructor'])) {
+            $arr['instructor'] = $arr['instructor_name'] ?? 'Unknown';
+        }
+        if (!isset($arr['sections'])) {
+            $arr['sections'] = [];
+        }
+
+        return response()->json(['message' => 'Course created.', 'data' => $arr], 201);
     }
 
     /**
@@ -109,8 +224,39 @@ class CourseController extends Controller
     public function show(string $id): JsonResponse
     {
         $course = Course::with(['category', 'instructor', 'sections.activities'])->findOrFail($id);
+        $arr = $course->toArray();
+        if (isset($arr['instructor']) && is_array($arr['instructor'])) {
+            $arr['instructor'] = $arr['instructor']['name'] ?? $arr['instructor_name'] ?? 'Unknown';
+        }
+        if (!isset($arr['instructor']) || is_array($arr['instructor'])) {
+            $arr['instructor'] = $arr['instructor_name'] ?? 'Unknown';
+        }
 
-        return response()->json(['data' => $course]);
+        return response()->json(['data' => $arr]);
+    }
+
+    /**
+     * GET /api/v1/courses/{id}/public
+     * Public course details for students (only visible courses).
+     */
+    public function publicShow(string $id): JsonResponse
+    {
+        $course = Course::with(['category', 'instructor', 'sections'])
+            ->where('id', $id)
+            ->where('visibility', 'shown')
+            ->firstOrFail();
+        $arr = $course->toArray();
+        if (isset($arr['instructor']) && is_array($arr['instructor'])) {
+            $arr['instructor'] = $arr['instructor']['name'] ?? $arr['instructor_name'] ?? 'Unknown';
+        }
+        if (!isset($arr['instructor']) || is_array($arr['instructor'])) {
+            $arr['instructor'] = $arr['instructor_name'] ?? 'Unknown';
+        }
+        if (!isset($arr['sections'])) {
+            $arr['sections'] = [];
+        }
+
+        return response()->json(['data' => $arr]);
     }
 
     /**

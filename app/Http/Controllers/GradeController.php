@@ -135,4 +135,32 @@ class GradeController extends Controller
 
         return response()->json(['data' => $grades, 'course_id' => $id, 'student_id' => $studentId]);
     }
+
+    /**
+     * GET /api/v1/courses/{id}/my-grades
+     * Return authenticated student's own grades for a course.
+     */
+    public function myGrades(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $course = Course::findOrFail($id);
+
+        $grades = StudentGrade::where('student_id', $user->id)
+            ->whereHas('gradeItem', fn ($q) => $q->where('course_id', $id))
+            ->with('gradeItem')
+            ->get()
+            ->map(fn ($sg) => [
+                'gradeItemId'   => $sg->grade_item_id,
+                'activityName'  => $sg->gradeItem->activity_name ?? '',
+                'activityType'  => $sg->gradeItem->activity_type ?? '',
+                'gradeMax'      => $sg->gradeItem->grade_max ?? 0,
+                'grade'         => $sg->grade,
+                'percentage'    => $sg->percentage,
+                'feedback'      => $sg->feedback,
+                'submittedDate' => $sg->submitted_date,
+                'status'        => $sg->status,
+            ]);
+
+        return response()->json(['data' => $grades, 'course_id' => $id]);
+    }
 }

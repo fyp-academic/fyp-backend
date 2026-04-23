@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use App\Models\Course;
 use App\Models\Section;
+use App\Models\Enrollment;
+use App\Models\Notification;
 
 class SectionController extends Controller
 {
@@ -20,6 +22,35 @@ class SectionController extends Controller
         $course   = Course::findOrFail($id);
         $sections = Section::where('course_id', $id)
             ->with('activities')
+            ->orderBy('sort_order')
+            ->get();
+
+        return response()->json(['data' => $sections, 'course_id' => $id]);
+    }
+
+    /**
+     * GET /api/v1/courses/{id}/sections (public)
+     * Return sections for enrolled students.
+     */
+    public function indexPublic(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $course = Course::findOrFail($id);
+
+        // Check if user is enrolled or course is visible
+        $isEnrolled = \App\Models\Enrollment::where('user_id', $user?->id)
+            ->where('course_id', $id)
+            ->exists();
+
+        if (!$isEnrolled && $course->visibility !== 'shown') {
+            return response()->json(['message' => 'Access denied. Enroll to view course content.'], 403);
+        }
+
+        $sections = Section::where('course_id', $id)
+            ->where('visible', true)
+            ->with(['activities' => function($q) {
+                $q->where('visible', true);
+            }])
             ->orderBy('sort_order')
             ->get();
 
@@ -57,6 +88,23 @@ class SectionController extends Controller
         ]);
 
         $section->load('activities');
+
+        // Notify enrolled students about new section
+        $enrolledStudents = Enrollment::where('course_id', $id)
+            ->where('role', 'student')
+            ->pluck('user_id');
+
+        foreach ($enrolledStudents as $studentId) {
+            Notification::create([
+                'id'      => Str::uuid()->toString(),
+                'user_id' => $studentId,
+                'title'   => 'New Section Added',
+                'message' => "A new section '{$request->title}' has been added to your course.",
+                'type'    => 'course_update',
+                'data'    => json_encode(['course_id' => $id, 'section_id' => $section->id]),
+                'read'    => false,
+            ]);
+        }
 
         return response()->json(['message' => 'Section created.', 'data' => $section], 201);
     }
