@@ -37,7 +37,7 @@ code,pre{font-family:'JetBrains Mono',monospace}
     <span class="text-xs font-semibold px-2 py-0.5 rounded" style="background:#1a6b87;color:#7dd3e8">V1</span>
   </div>
   <div class="flex items-center gap-2 px-3 py-1.5 rounded-md text-xs font-mono" style="background:#072e3a;color:#7dd3e8;border:1px solid #1a6b87">
-    http://127.0.0.1:8000/api/v1
+    https://api.codagenz.com/api/v1
   </div>
 </nav>
 
