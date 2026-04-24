@@ -43,18 +43,21 @@ Route::prefix('v1')->group(function () {
         Route::post('forgot-password',  [AuthController::class, 'forgotPassword']);
         Route::post('reset-password',   [AuthController::class, 'resetPassword'])->name('password.reset');
         // Email verification flow
-        // Step 1: GET with signed URL (redirects to frontend)
-        Route::get('verify-email/{id}/{hash}', [AuthController::class, 'verifyEmail'])
-            ->middleware(['signed'])
-            ->name('verification.verify');
+        // Static routes MUST be defined before parameterized routes
+
+        // Step 1: Resend verification email (public or authenticated)
+        Route::post('verify-email/resend', [AuthController::class, 'resendVerification'])
+            ->name('verification.send');
 
         // Step 2: POST to confirm (called by frontend with signature)
         Route::post('verify-email/confirm', [AuthController::class, 'confirmVerification'])
             ->name('verification.confirm');
 
-        // Step 3: Resend verification email (public or authenticated)
-        Route::post('verify-email/resend', [AuthController::class, 'resendVerification'])
-            ->name('verification.send');
+        // Step 3: GET with signed URL (redirects to frontend)
+        // Must be last as it has parameters that could match other routes
+        Route::get('verify-email/{id}/{hash}', [AuthController::class, 'verifyEmail'])
+            ->middleware(['signed'])
+            ->name('verification.verify');
 
         // Protected — valid Sanctum token required
         Route::middleware('auth:sanctum')->group(function () {

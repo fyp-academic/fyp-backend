@@ -2,6 +2,7 @@
 
 namespace App\Notifications;
 
+use App\Mail\PasswordResetMail;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Notifications\Messages\MailMessage;
@@ -46,14 +47,23 @@ class CustomResetPassword extends Notification implements ShouldQueue
 
     /**
      * Build the mail representation of the notification.
+     * Uses React email template via PasswordResetMail.
      */
-    public function toMail(object $notifiable): MailMessage
+    public function toMail(object $notifiable): MailMessage|PasswordResetMail
     {
         if (static::$toMailCallback) {
             return call_user_func(static::$toMailCallback, $notifiable, $this->token);
         }
 
-        return $this->buildMailMessage($notifiable, $this->resetUrl($notifiable));
+        $resetUrl = $this->resetUrl($notifiable);
+        $expiresIn = Config::get('auth.passwords.' . Config::get('auth.defaults.passwords') . '.expire', 60) . ' minutes';
+
+        // Use React email template via Mailable
+        return new PasswordResetMail(
+            userName: $notifiable->name,
+            resetUrl: $resetUrl,
+            expiresIn: $expiresIn,
+        );
     }
 
     /**
