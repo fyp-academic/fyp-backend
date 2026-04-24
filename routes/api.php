@@ -42,13 +42,23 @@ Route::prefix('v1')->group(function () {
         Route::post('login',            [AuthController::class, 'login']);
         Route::post('forgot-password',  [AuthController::class, 'forgotPassword']);
         Route::post('reset-password',   [AuthController::class, 'resetPassword'])->name('password.reset');
+        // Email verification flow
+        // Step 1: GET with signed URL (redirects to frontend)
         Route::get('verify-email/{id}/{hash}', [AuthController::class, 'verifyEmail'])
             ->middleware(['signed'])
             ->name('verification.verify');
 
+        // Step 2: POST to confirm (called by frontend with signature)
+        Route::post('verify-email/confirm', [AuthController::class, 'confirmVerification'])
+            ->name('verification.confirm');
+
+        // Step 3: Resend verification email (public or authenticated)
+        Route::post('verify-email/resend', [AuthController::class, 'resendVerification'])
+            ->name('verification.send');
+
         // Protected — valid Sanctum token required
         Route::middleware('auth:sanctum')->group(function () {
-            Route::post('email/resend', [AuthController::class, 'resendVerification']);
+            // Keep for backward compatibility, but public endpoint is preferred
             Route::get('me',            [AuthController::class, 'me']);
             Route::post('logout',       [AuthController::class, 'logout']);
         });

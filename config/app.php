@@ -56,6 +56,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Frontend URLs
+    |--------------------------------------------------------------------------
+    |
+    | These URLs are used when generating links for email verification and
+    | password reset that should point to the frontend applications rather
+    | than the backend API. Separate URLs are provided for student and
+    | instructor frontends based on user role.
+    |
+    */
+
+    'frontend_student_url' => env('FRONTEND_STUDENT_URL', 'https://apesudom.codagenz.com'),
+    'frontend_instructor_url' => env('FRONTEND_INSTRUCTOR_URL', 'https://apesguide.codagenz.com'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Application Timezone
     |--------------------------------------------------------------------------
     |
