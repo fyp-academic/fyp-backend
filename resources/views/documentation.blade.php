@@ -152,15 +152,15 @@ $svgSc='<svg class="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" vi
  '{"message":"Your password has been reset."}',
  [['200','OK','Password reset successful'],['400','Bad Request','Token expired or invalid']]],
 
-['GET','Verify Email','/api/v1/auth/verify-email/{id}/{hash}',false,['Public'],'Confirm the signed link sent after registration.',
- null,
- '{"message":"Email verified successfully."}',
- [['200','OK','Email verified'],['403','Forbidden','Invalid or tampered signature']]],
+['POST','Verify Email Code','/api/v1/auth/verify-email-code',false,['Public'],'Verify email using the 6-digit OTP sent after registration.',
+ '{"email":"alice@university.edu","code":"123456"}',
+ '{"message":"Email verified successfully.","verified":true}',
+ [['200','OK','Email verified'],['403','Forbidden','Invalid or expired code'],['422','Unprocessable Entity','Invalid input']]],
 
-['POST','Resend Verification','/api/v1/auth/email/resend',true,['Student','Instructor','Admin'],'Re-send the verification email for an unverified account.',
- null,
- '{"message":"Verification email resent."}',
- [['200','OK','Email sent'],['400','Bad Request','Email already verified']]],
+['POST','Resend Verification','/api/v1/auth/verify-email/resend',false,['Public'],'Re-send the verification code for an unverified account. Supports authenticated or unauthenticated (with email param) requests.',
+ '{"email":"alice@university.edu"}',
+ '{"message":"Verification code resent successfully.","email":"alice@university.edu"}',
+ [['200','OK','Code sent'],['400','Bad Request','Email already verified'],['429','Too Many Requests','Please wait before requesting another code']]],
 
 ['GET','Current User','/api/v1/auth/me',true,['Student','Instructor','Admin'],'Return the authenticated user\'s full profile.',
  null,

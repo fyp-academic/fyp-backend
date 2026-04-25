@@ -4,18 +4,21 @@ namespace App\Models;
 
 use App\Notifications\CustomVerifyEmail;
 use App\Notifications\CustomResetPassword;
-use Illuminate\Contracts\Auth\MustVerifyEmail;
+use Illuminate\Auth\MustVerifyEmail;
+use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Log;
 use Laravel\Sanctum\HasApiTokens;
 
-class User extends Authenticatable implements MustVerifyEmail
+class User extends Authenticatable implements MustVerifyEmailContract
 {
-    use HasApiTokens, HasFactory, HasUuids, Notifiable;
+    use HasApiTokens, HasFactory, HasUuids, MustVerifyEmail, Notifiable;
 
     /**
      * IMPORTANT: UUID setup
@@ -31,12 +34,19 @@ class User extends Authenticatable implements MustVerifyEmail
         'email',
         'password',
         'role',
+        'registration_number',
+        'degree_programme_id',
+        'year_of_study',
+        'education_level',
+        'nationality',
         'bio',
         'department',
         'institution',
         'country',
         'timezone',
         'language',
+        'verification_code',
+        'verification_code_expires_at',
     ];
 
     /**
@@ -54,6 +64,7 @@ class User extends Authenticatable implements MustVerifyEmail
     {
         return [
             'email_verified_at' => 'datetime',
+            'verification_code_expires_at' => 'datetime',
             'password' => 'hashed',
         ];
     }
@@ -61,11 +72,11 @@ class User extends Authenticatable implements MustVerifyEmail
     /**
      * Send email verification
      */
-    public function sendEmailVerificationNotification()
+    public function sendEmailVerificationNotification(?string $code = null)
     {
         Log::info('Sending verification email to: ' . $this->email);
 
-        $this->notify(new CustomVerifyEmail());
+        $this->notify(new CustomVerifyEmail($code));
 
         Log::info('Verification email dispatched');
     }
@@ -109,5 +120,15 @@ class User extends Authenticatable implements MustVerifyEmail
     public function preferences(): HasMany
     {
         return $this->hasMany(UserPreference::class);
+    }
+
+    public function degreeProgramme(): BelongsTo
+    {
+        return $this->belongsTo(DegreeProgramme::class);
+    }
+
+    public function assignedDegreeProgrammes(): BelongsToMany
+    {
+        return $this->belongsToMany(DegreeProgramme::class, 'degree_programme_instructor', 'instructor_id', 'degree_programme_id');
     }
 }

@@ -29,6 +29,8 @@ use App\Http\Controllers\GlossaryController;
 use App\Http\Controllers\LessonController;
 use App\Http\Controllers\ScormController;
 use App\Http\Controllers\MessageController;
+use App\Http\Controllers\CollegeController;
+use App\Http\Controllers\DegreeProgrammeController;
 
 Route::prefix('v1')->group(function () {
 
@@ -40,24 +42,18 @@ Route::prefix('v1')->group(function () {
         // Public — no token required
         Route::post('register',         [AuthController::class, 'register']);
         Route::post('login',            [AuthController::class, 'login']);
+        Route::post('parse-registration', [AuthController::class, 'parseRegistration']);
         Route::post('forgot-password',  [AuthController::class, 'forgotPassword']);
         Route::post('reset-password',   [AuthController::class, 'resetPassword'])->name('password.reset');
-        // Email verification flow
-        // Static routes MUST be defined before parameterized routes
+        // Email verification flow (OTP-based)
 
-        // Step 1: Resend verification email (public or authenticated)
+        // Step 1: Verify email with OTP code
+        Route::post('verify-email-code', [AuthController::class, 'verifyEmailCode'])
+            ->name('verification.code');
+
+        // Step 2: Resend verification code (public or authenticated)
         Route::post('verify-email/resend', [AuthController::class, 'resendVerification'])
             ->name('verification.send');
-
-        // Step 2: POST to confirm (called by frontend with signature)
-        Route::post('verify-email/confirm', [AuthController::class, 'confirmVerification'])
-            ->name('verification.confirm');
-
-        // Step 3: GET with signed URL (redirects to frontend)
-        // Must be last as it has parameters that could match other routes
-        Route::get('verify-email/{id}/{hash}', [AuthController::class, 'verifyEmail'])
-            ->middleware(['signed'])
-            ->name('verification.verify');
 
         // Protected — valid Sanctum token required
         Route::middleware('auth:sanctum')->group(function () {
@@ -245,6 +241,33 @@ Route::prefix('v1')->group(function () {
         Route::prefix('grade-items')->group(function () {
             Route::get('/{id}',         [GradeController::class, 'show']);
             Route::post('/{id}/grades', [GradeController::class, 'submitGrade']);
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // COLLEGES (Admin only)
+        // ─────────────────────────────────────────────────────────────────────
+        Route::middleware('strict.admin')->prefix('colleges')->group(function () {
+            Route::get('/',    [CollegeController::class, 'index']);
+            Route::post('/',   [CollegeController::class, 'store']);
+            Route::get('/{id}',    [CollegeController::class, 'show']);
+            Route::put('/{id}',    [CollegeController::class, 'update']);
+            Route::delete('/{id}', [CollegeController::class, 'destroy']);
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // DEGREE PROGRAMMES (Admin or Instructor)
+        // ─────────────────────────────────────────────────────────────────────
+        Route::middleware('admin.or.instructor')->prefix('degree-programmes')->group(function () {
+            Route::get('/',    [DegreeProgrammeController::class, 'index']);
+            Route::post('/',   [DegreeProgrammeController::class, 'store']);
+            Route::get('/{id}',    [DegreeProgrammeController::class, 'show']);
+            Route::put('/{id}',    [DegreeProgrammeController::class, 'update']);
+            Route::delete('/{id}', [DegreeProgrammeController::class, 'destroy']);
+
+            // Admin capabilities
+            Route::post('/{id}/instructors', [DegreeProgrammeController::class, 'assignInstructors']);
+            Route::get('/{id}/students', [DegreeProgrammeController::class, 'students']);
+            Route::get('/{id}/courses', [DegreeProgrammeController::class, 'courses']);
         });
 
         // ─────────────────────────────────────────────────────────────────────

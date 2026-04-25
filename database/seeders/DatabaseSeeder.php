@@ -17,6 +17,8 @@ class DatabaseSeeder extends Seeder
      */
     public function run(): void
     {
+        $this->call(AcademicStructureSeeder::class);
+
         $users = [
             [
                 'name' => 'Instructor User',

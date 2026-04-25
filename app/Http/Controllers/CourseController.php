@@ -10,6 +10,7 @@ use App\Models\Course;
 use App\Models\Category;
 use App\Models\Enrollment;
 use App\Models\User;
+use App\Models\DegreeProgramme;
 
 class CourseController extends Controller
 {
@@ -70,6 +71,7 @@ class CourseController extends Controller
     /**
      * GET /api/v1/courses/catalog
      * Public catalog for students to browse visible courses.
+     * If the user is a student with a degree programme, only show relevant courses.
      */
     public function catalog(Request $request): JsonResponse
     {
@@ -110,8 +112,20 @@ class CourseController extends Controller
             ->where('visibility', 'shown')
             ->where('status', 'active');
 
+        // If user is a student with a degree programme, restrict to their programme's courses
+        if ($user && $user->role === 'student' && $user->degree_programme_id) {
+            $query->whereHas('degreeProgrammes', function ($q) use ($user) {
+                $q->where('degree_programmes.id', $user->degree_programme_id);
+            });
+        }
+
         if ($request->filled('category_id')) {
             $query->where('category_id', $request->category_id);
+        }
+        if ($request->filled('degree_programme_id')) {
+            $query->whereHas('degreeProgrammes', function ($q) use ($request) {
+                $q->where('degree_programmes.id', $request->degree_programme_id);
+            });
         }
         if ($request->filled('search')) {
             $query->where(function ($q) use ($request) {
@@ -156,6 +170,9 @@ class CourseController extends Controller
             'short_name'    => 'required|string|max:50',
             'description'   => 'sometimes|nullable|string',
             'category_id'   => 'required|string|exists:categories,id',
+            'college_id'    => 'sometimes|nullable|string|exists:colleges,id',
+            'degree_programme_ids' => 'sometimes|array',
+            'degree_programme_ids.*' => 'string|exists:degree_programmes,id',
             'format'        => 'required|string|in:topics,weekly,social',
             'visibility'    => 'sometimes|string|in:shown,hidden',
             'status'        => 'sometimes|string|in:draft,active,archived',
@@ -187,6 +204,7 @@ class CourseController extends Controller
             'description'       => $request->input('description'),
             'category_id'       => $category->id,
             'category_name'     => $category->name,
+            'college_id'        => $request->input('college_id'),
             'instructor_id'     => $user->id,
             'instructor_name'   => $user->name,
             'enrolled_students' => 0,
@@ -200,6 +218,10 @@ class CourseController extends Controller
             'max_students'      => $request->input('max_students'),
             'image'             => $request->input('image'),
         ]);
+
+        if ($request->has('degree_programme_ids')) {
+            $course->degreeProgrammes()->sync($request->degree_programme_ids);
+        }
 
         $course->load(['category', 'instructor', 'sections.activities']);
 
@@ -287,7 +309,7 @@ class CourseController extends Controller
         }
 
         $data = $request->only([
-            'name', 'short_name', 'description', 'category_id', 'format',
+            'name', 'short_name', 'description', 'category_id', 'college_id', 'format',
             'status', 'visibility', 'start_date', 'end_date', 'language', 'tags', 'max_students',
         ]);
 
@@ -297,6 +319,10 @@ class CourseController extends Controller
         }
 
         $course->update($data);
+
+        if ($request->has('degree_programme_ids')) {
+            $course->degreeProgrammes()->sync($request->degree_programme_ids);
+        }
         $course->load(['category', 'instructor', 'sections.activities']);
 
         return response()->json(['message' => 'Course updated.', 'data' => $course]);

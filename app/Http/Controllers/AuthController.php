@@ -4,21 +4,100 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Facades\URL;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Auth\Events\Verified;
 use Illuminate\Auth\Events\PasswordReset;
 use App\Models\User;
+use App\Models\DegreeProgramme;
+use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
+    /**
+     * Nationality mapping from registration number prefix.
+     */
+    private const NATIONALITY_MAP = [
+        'T' => ['country' => 'Tanzania', 'flag' => '🇹🇿'],
+        'K' => ['country' => 'Kenya', 'flag' => '🇰🇪'],
+        'B' => ['country' => 'Burundi', 'flag' => '🇧🇮'],
+        'R' => ['country' => 'Rwanda', 'flag' => '🇷🇼'],
+        'U' => ['country' => 'Uganda', 'flag' => '🇺🇬'],
+    ];
+
+    /**
+     * Education level mapping.
+     */
+    private const EDUCATION_LEVEL_MAP = [
+        '03' => "Bachelor's Degree",
+        '02' => 'Diploma',
+    ];
+
+    /**
+     * Parse registration number and extract structured data.
+     * Format: XYY-LL-NNNNN (e.g., T23-03-09759)
+     */
+    private function parseRegistrationNumber(string $regNo): array
+    {
+        $pattern = '/^([TKBRU])(\d{2})-(\d{2})-(\d{5})$/';
+        if (!preg_match($pattern, $regNo, $matches)) {
+            return ['valid' => false];
+        }
+
+        $nationalityCode = $matches[1];
+        $yearDigits = $matches[2];
+        $levelCode = $matches[3];
+        $uniqueId = $matches[4];
+
+        $nationality = self::NATIONALITY_MAP[$nationalityCode] ?? null;
+        $educationLevel = self::EDUCATION_LEVEL_MAP[$levelCode] ?? null;
+
+        if (!$nationality || !$educationLevel) {
+            return ['valid' => false];
+        }
+
+        $registrationYear = 2000 + (int) $yearDigits;
+        $currentYear = (int) now()->format('Y');
+        $yearOfStudy = max(1, min($currentYear - $registrationYear + 1, 5));
+
+        return [
+            'valid' => true,
+            'nationality_code' => $nationalityCode,
+            'nationality' => $nationality['country'],
+            'flag' => $nationality['flag'],
+            'registration_year' => $registrationYear,
+            'education_level_code' => $levelCode,
+            'education_level' => $educationLevel,
+            'unique_id' => $uniqueId,
+            'year_of_study' => $yearOfStudy,
+        ];
+    }
+
+    /**
+     * Generate a secure 6-digit verification code, store it hashed, and send it.
+     */
+    private function generateAndSendVerificationCode(User $user): string
+    {
+        $code = (string) random_int(100000, 999999);
+
+        $user->forceFill([
+            'verification_code' => Hash::make($code),
+            'verification_code_expires_at' => now()->addMinutes(10),
+        ])->save();
+
+        $user->sendEmailVerificationNotification($code);
+
+        Log::info('Verification code generated for user: ' . $user->email);
+
+        return $code;
+    }
+
     /**
      * POST /api/v1/auth/register
      * Create a new platform account and trigger email verification.
@@ -26,30 +105,88 @@ class AuthController extends Controller
     public function register(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'name'       => 'required|string|max:255',
-            'email'      => 'required|string|email|max:255|unique:users',
-            'password'   => 'required|string|min:8|confirmed',
-            'role'       => 'sometimes|string|in:student,instructor,admin',
+            'name'                   => 'required|string|max:255',
+            'email'                  => 'required|string|email|max:255|unique:users',
+            'password'               => 'required|string|min:8|confirmed',
+            'role'                   => 'sometimes|string|in:student,instructor,admin',
+            'registration_number'    => 'sometimes|nullable|string|max:30|unique:users',
+            'degree_programme_id'  => 'sometimes|nullable|string|exists:degree_programmes,id',
+            'college_id'             => 'sometimes|nullable|string|exists:colleges,id',
         ]);
 
         if ($validator->fails()) {
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $user = User::create([
-            'name'     => $request->name,
-            'email'    => $request->email,
-            'password' => Hash::make($request->password),
-            'role'     => $request->input('role', 'student'),
-        ]);
+        $role = $request->input('role', 'student');
+        $regNo = $request->input('registration_number');
+        $parsed = null;
+
+        // Parse registration number if provided (especially for students)
+        if ($regNo) {
+            $parsed = $this->parseRegistrationNumber($regNo);
+            if (!$parsed['valid']) {
+                return response()->json([
+                    'errors' => [
+                        'registration_number' => ['Invalid registration number format. Expected format: XYY-LL-NNNNN (e.g., T23-03-09759)'],
+                    ],
+                ], 422);
+            }
+        }
+
+        $userData = [
+            'id'                    => Str::uuid()->toString(),
+            'name'                  => $request->name,
+            'email'                 => $request->email,
+            'password'              => Hash::make($request->password),
+            'role'                  => $role,
+            'registration_number'   => $regNo,
+            'degree_programme_id'   => $request->input('degree_programme_id'),
+            'year_of_study'         => $parsed['year_of_study'] ?? null,
+            'education_level'       => $parsed['education_level'] ?? $request->input('education_level'),
+            'nationality'           => $parsed['nationality'] ?? $request->input('nationality'),
+            'country'               => $parsed['nationality'] ?? $request->input('country'),
+        ];
+
+        $user = User::create($userData);
 
         event(new Registered($user));
 
+        $this->generateAndSendVerificationCode($user);
+
         return response()->json([
-            'message' => 'Account created successfully. Please check your email to verify your account before logging in.',
-            'user'    => $user,
+            'message' => 'Account created successfully. Please check your email for the verification code.',
+            'user'    => $user->makeHidden(['verification_code', 'verification_code_expires_at']),
+            'parsed_registration' => $parsed,
             'requires_verification' => true,
         ], 201);
+    }
+
+    /**
+     * POST /api/v1/auth/parse-registration
+     * Public endpoint to parse a registration number and return extracted data.
+     */
+    public function parseRegistration(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'registration_number' => 'required|string|max:30',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $parsed = $this->parseRegistrationNumber($request->registration_number);
+
+        if (!$parsed['valid']) {
+            return response()->json([
+                'errors' => [
+                    'registration_number' => ['Invalid format. Expected: XYY-LL-NNNNN (e.g., T23-03-09759)'],
+                ],
+            ], 422);
+        }
+
+        return response()->json(['data' => $parsed]);
     }
 
     /**
@@ -71,6 +208,7 @@ class AuthController extends Controller
             return response()->json(['message' => 'Invalid credentials.'], 401);
         }
 
+        /** @var \App\Models\User $user */
         $user = Auth::user();
 
         // Check if email is verified
@@ -151,68 +289,26 @@ class AuthController extends Controller
     }
 
     /**
-     * GET /api/v1/auth/verify-email/{id}/{hash}
-     * Validate the signed URL and redirect to frontend with token.
-     * This endpoint is called when user clicks the email link.
+     * POST /api/v1/auth/verify-email-code
+     * Verify email using a one-time code sent to the user's email.
      */
-    public function verifyEmail(Request $request, string $id, string $hash): RedirectResponse|JsonResponse
-    {
-        $user = User::findOrFail($id);
-
-        // Validate the hash matches the user's email
-        if (!hash_equals((string) $hash, sha1($user->getEmailForVerification()))) {
-            return $this->redirectToFrontend('error', 'Invalid verification link.');
-        }
-
-        // Check if already verified
-        if ($user->hasVerifiedEmail()) {
-            return $this->redirectToFrontend('info', 'Email already verified.');
-        }
-
-        // Check if the URL signature is valid (Laravel's signed URL validation)
-        if (!$request->hasValidSignature()) {
-            return $this->redirectToFrontend('error', 'Verification link has expired or is invalid.');
-        }
-
-        // Redirect to frontend with verification parameters
-        // Frontend will then POST to /api/v1/auth/verify-email/confirm
-        $frontendUrl = $this->getFrontendUrl($user) . '/verify-email';
-
-        return redirect($frontendUrl . '?' . http_build_query([
-            'id' => $id,
-            'hash' => $hash,
-            'signature' => $request->query('signature'),
-            'expires' => $request->query('expires'),
-            'status' => 'pending',
-        ]));
-    }
-
-    /**
-     * POST /api/v1/auth/verify-email/confirm
-     * Confirm email verification (called by frontend after redirect).
-     * Secure: requires POST, CSRF protection via signature validation.
-     */
-    public function confirmVerification(Request $request): JsonResponse
+    public function verifyEmailCode(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'id' => 'required|string',
-            'hash' => 'required|string',
-            'signature' => 'required|string',
-            'expires' => 'required|string',
+            'email' => 'required|email',
+            'code'  => 'required|string|size:6',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['message' => 'Invalid verification data.'], 422);
+            return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $user = User::findOrFail($request->id);
+        $user = User::where('email', $request->email)->first();
 
-        // Validate the hash
-        if (!hash_equals((string) $request->hash, sha1($user->getEmailForVerification()))) {
-            return response()->json(['message' => 'Invalid verification link.'], 403);
+        if (!$user) {
+            return response()->json(['message' => 'Invalid email or verification code.'], 403);
         }
 
-        // Check if already verified
         if ($user->hasVerifiedEmail()) {
             return response()->json([
                 'message' => 'Email already verified.',
@@ -220,35 +316,31 @@ class AuthController extends Controller
             ]);
         }
 
-        // Validate the signed URL by reconstructing it
-        $temporarySignedUrl = URL::temporarySignedRoute(
-            'verification.verify',
-            $request->expires,
-            [
-                'id' => $request->id,
-                'hash' => $request->hash,
-            ]
-        );
-
-        // Verify the signature matches
-        $parsedUrl = parse_url($temporarySignedUrl);
-        parse_str($parsedUrl['query'] ?? '', $queryParams);
-
-        if (($queryParams['signature'] ?? '') !== $request->signature) {
-            return response()->json(['message' => 'Invalid or expired verification link.'], 403);
+        // Check code expiry
+        if (!$user->verification_code_expires_at || now()->isAfter($user->verification_code_expires_at)) {
+            return response()->json([
+                'message' => 'Verification code has expired. Please request a new one.',
+                'expired' => true,
+            ], 403);
         }
 
-        // Check if expired
-        if (now()->timestamp > (int) $request->expires) {
-            return response()->json(['message' => 'Verification link has expired.'], 403);
+        // Check code validity (hashed)
+        if (!$user->verification_code || !Hash::check($request->code, $user->verification_code)) {
+            return response()->json([
+                'message' => 'Invalid verification code.',
+            ], 403);
         }
 
-        // Mark as verified
-        if ($user->markEmailAsVerified()) {
-            event(new Verified($user));
-        }
+        // Mark as verified and invalidate the code
+        $user->forceFill([
+            'email_verified_at' => now(),
+            'verification_code' => null,
+            'verification_code_expires_at' => null,
+        ])->save();
 
-        Log::info('Email verified for user: ' . $user->email);
+        event(new Verified($user));
+
+        Log::info('Email verified via OTP for user: ' . $user->email);
 
         return response()->json([
             'message' => 'Email verified successfully.',
@@ -258,7 +350,7 @@ class AuthController extends Controller
 
     /**
      * POST /api/v1/auth/verify-email/resend
-     * Resend verification email.
+     * Resend verification code.
      * Supports both authenticated and unauthenticated requests.
      */
     public function resendVerification(Request $request): JsonResponse
@@ -281,7 +373,7 @@ class AuthController extends Controller
             if (!$user) {
                 // Don't reveal if email exists
                 return response()->json([
-                    'message' => 'If this email exists and needs verification, a new link has been sent.'
+                    'message' => 'If this email exists and needs verification, a new code has been sent.'
                 ]);
             }
         }
@@ -294,51 +386,26 @@ class AuthController extends Controller
         }
 
         // Throttle resends to prevent abuse (1 per minute)
-        $lastSend = cache()->get('verification_email_' . $user->id);
+        $lastSend = Cache::get('verification_email_' . $user->id);
         if ($lastSend && now()->diffInSeconds($lastSend) < 60) {
             return response()->json([
-                'message' => 'Please wait before requesting another email.',
+                'message' => 'Please wait before requesting another code.',
                 'retry_after' => 60 - now()->diffInSeconds($lastSend),
             ], 429);
         }
 
-        cache()->put('verification_email_' . $user->id, now(), 60);
+        Cache::put('verification_email_' . $user->id, now(), 60);
 
-        $user->sendEmailVerificationNotification();
+        $this->generateAndSendVerificationCode($user);
 
-        Log::info('Verification email resent to: ' . $user->email);
+        Log::info('Verification code resent to: ' . $user->email);
 
         return response()->json([
-            'message' => 'Verification email resent successfully.',
+            'message' => 'Verification code resent successfully.',
             'email' => $user->email,
         ]);
     }
 
-    /**
-     * Helper: Get the appropriate frontend URL based on user role.
-     */
-    private function getFrontendUrl(User $user): string
-    {
-        return match ($user->role) {
-            'instructor' => Config::get('app.frontend_instructor_url'),
-            'admin' => Config::get('app.frontend_instructor_url'),
-            default => Config::get('app.frontend_student_url'),
-        };
-    }
-
-    /**
-     * Helper: Redirect to frontend with status message.
-     */
-    private function redirectToFrontend(string $type, string $message): RedirectResponse
-    {
-        // Default to student frontend if user not found
-        $frontendUrl = Config::get('app.frontend_student_url') . '/verify-email';
-
-        return redirect($frontendUrl . '?' . http_build_query([
-            'status' => $type,
-            'message' => $message,
-        ]));
-    }
 
     /**
      * GET /api/v1/auth/me

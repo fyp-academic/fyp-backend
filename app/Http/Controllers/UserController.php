@@ -13,7 +13,8 @@ class UserController extends Controller
      */
     public function index(): JsonResponse
     {
-        $users = User::select('id', 'name', 'email', 'role', 'department', 'institution', 'email_verified_at', 'created_at')
+        $users = User::select('id', 'name', 'email', 'role', 'registration_number', 'degree_programme_id', 'year_of_study', 'education_level', 'nationality', 'department', 'institution', 'email_verified_at', 'created_at')
+            ->with('degreeProgramme.college')
             ->orderBy('created_at', 'desc')
             ->get();
 
