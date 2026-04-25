@@ -253,7 +253,6 @@ Route::prefix('v1')->group(function () {
         // COLLEGES (Admin only)
         // ─────────────────────────────────────────────────────────────────────
         Route::middleware('strict.admin')->prefix('colleges')->group(function () {
-            Route::get('/',    [CollegeController::class, 'index']);
             Route::post('/',   [CollegeController::class, 'store']);
             Route::get('/{id}',    [CollegeController::class, 'show']);
             Route::put('/{id}',    [CollegeController::class, 'update']);
@@ -264,7 +263,6 @@ Route::prefix('v1')->group(function () {
         // DEGREE PROGRAMMES (Admin or Instructor)
         // ─────────────────────────────────────────────────────────────────────
         Route::middleware('admin.or.instructor')->prefix('degree-programmes')->group(function () {
-            Route::get('/',    [DegreeProgrammeController::class, 'index']);
             Route::post('/',   [DegreeProgrammeController::class, 'store']);
             Route::get('/{id}',    [DegreeProgrammeController::class, 'show']);
             Route::put('/{id}',    [DegreeProgrammeController::class, 'update']);
