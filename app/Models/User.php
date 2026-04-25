@@ -2,10 +2,8 @@
 
 namespace App\Models;
 
-use App\Notifications\CustomVerifyEmail;
+use App\Mail\OtpVerificationMail;
 use App\Notifications\CustomResetPassword;
-use Illuminate\Auth\MustVerifyEmail;
-use Illuminate\Contracts\Auth\MustVerifyEmail as MustVerifyEmailContract;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -14,11 +12,12 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Laravel\Sanctum\HasApiTokens;
 
-class User extends Authenticatable implements MustVerifyEmailContract
+class User extends Authenticatable
 {
-    use HasApiTokens, HasFactory, HasUuids, MustVerifyEmail, Notifiable;
+    use HasApiTokens, HasFactory, HasUuids, Notifiable;
 
     /**
      * IMPORTANT: UUID setup
@@ -70,15 +69,31 @@ class User extends Authenticatable implements MustVerifyEmailContract
     }
 
     /**
-     * Send email verification
+     * Determine if the user has verified their email address.
      */
-    public function sendEmailVerificationNotification(?string $code = null)
+    public function hasVerifiedEmail(): bool
     {
-        Log::info('Sending verification email to: ' . $this->email);
+        return ! is_null($this->email_verified_at);
+    }
 
-        $this->notify(new CustomVerifyEmail($code));
+    /**
+     * Send OTP email verification via branded Mailable.
+     */
+    public function sendEmailVerificationNotification(?string $code = null): void
+    {
+        if (empty($code)) {
+            return;
+        }
 
-        Log::info('Verification email dispatched');
+        Log::info('Sending OTP verification email to: ' . $this->email);
+
+        Mail::to($this->email)->queue(new OtpVerificationMail(
+            userName: $this->name,
+            code: $code,
+            expiresInMinutes: 10,
+        ));
+
+        Log::info('OTP verification email dispatched');
     }
 
     /**

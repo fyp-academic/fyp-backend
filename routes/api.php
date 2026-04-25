@@ -379,7 +379,7 @@ Route::prefix('v1')->group(function () {
         Route::put('lesson-pages/{id}',    [LessonController::class, 'update']);
         Route::delete('lesson-pages/{id}', [LessonController::class, 'destroy']);
 
-        // ─────────────────────────────────────────────────────────────────────
+        // ────────────────────────────────────────────────────────────────────
         // PROFILE & PREFERENCES
         // ─────────────────────────────────────────────────────────────────────
         Route::prefix('profile')->group(function () {
