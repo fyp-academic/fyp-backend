@@ -64,6 +64,12 @@ Route::prefix('v1')->group(function () {
     });
 
     // =========================================================================
+    // PUBLIC — Colleges & Degree Programmes (needed for registration)
+    // =========================================================================
+    Route::get('/colleges', [CollegeController::class, 'index']);
+    Route::get('/degree-programmes', [DegreeProgrammeController::class, 'index']);
+
+    // =========================================================================
     // ALL REMAINING ROUTES — require valid Sanctum token
     // =========================================================================
     Route::middleware('auth:sanctum')->group(function () {
