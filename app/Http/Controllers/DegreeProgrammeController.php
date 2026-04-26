@@ -21,14 +21,16 @@ class DegreeProgrammeController extends Controller
         $user = $request->user();
         $query = DegreeProgramme::with('college');
 
-        // Apply role-based filtering
-        if (RolePolicy::isInstructor($user)) {
-            $assignedIds = RolePolicy::getAssignedProgrammeIds($user);
-            if (!empty($assignedIds)) {
-                $query->whereIn('id', $assignedIds);
-            } else {
-                // Instructor with no assignments sees nothing
-                return response()->json(['data' => []]);
+        // Apply role-based filtering only if authenticated
+        if ($user !== null) {
+            if (RolePolicy::isInstructor($user)) {
+                $assignedIds = RolePolicy::getAssignedProgrammeIds($user);
+                if (!empty($assignedIds)) {
+                    $query->whereIn('id', $assignedIds);
+                } else {
+                    // Instructor with no assignments sees nothing
+                    return response()->json(['data' => []]);
+                }
             }
         }
 
