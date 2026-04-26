@@ -18,6 +18,7 @@ use Illuminate\Auth\Events\Verified;
 use Illuminate\Auth\Events\PasswordReset;
 use App\Models\User;
 use App\Models\DegreeProgramme;
+use App\Policies\RolePolicy;
 use Illuminate\Support\Str;
 
 class AuthController extends Controller
@@ -26,7 +27,8 @@ class AuthController extends Controller
      * Nationality mapping from registration number prefix.
      */
     private const NATIONALITY_MAP = [
-        'T' => ['country' => 'Tanzania', 'flag' => '🇹🇿'],
+        'T' => ['country' => 'Tanzania', 'flag' => '🇹🇿', 'region' => 'Mainland'],
+        'Z' => ['country' => 'Tanzania', 'flag' => '🇹🇿', 'region' => 'Zanzibar'],
         'K' => ['country' => 'Kenya', 'flag' => '🇰🇪'],
         'B' => ['country' => 'Burundi', 'flag' => '🇧🇮'],
         'R' => ['country' => 'Rwanda', 'flag' => '🇷🇼'],
@@ -44,10 +46,15 @@ class AuthController extends Controller
     /**
      * Parse registration number and extract structured data.
      * Format: XYY-LL-NNNNN (e.g., T23-03-09759)
+     * X = Nationality (T=Tanzania Mainland, Z=Tanzania Zanzibar, K=Kenya, B=Burundi, R=Rwanda, U=Uganda)
+     * YY = Intake year (23 = 2023)
+     * LL = Education level (03=Bachelor's, 02=Diploma)
+     * NNNNN = Unique student ID
      */
     private function parseRegistrationNumber(string $regNo): array
     {
-        $pattern = '/^([TKBRU])(\d{2})-(\d{2})-(\d{5})$/';
+        // Updated pattern to include Z for Zanzibar
+        $pattern = '/^([TKBRUZ])(\d{2})-(\d{2})-(\d{5})$/';
         if (!preg_match($pattern, $regNo, $matches)) {
             return ['valid' => false];
         }
@@ -66,13 +73,22 @@ class AuthController extends Controller
 
         $registrationYear = 2000 + (int) $yearDigits;
         $currentYear = (int) now()->format('Y');
-        $yearOfStudy = max(1, min($currentYear - $registrationYear + 1, 5));
+
+        // Calculate year of study: current_year - intake_year
+        // Example: T23-03-09759, current year 2025 → 2025 - 2023 = 2 → Second year
+        // Example: T23-03-09759, current year 2026 → 2026 - 2023 = 3 → Third year
+        $yearOfStudy = max(1, $currentYear - $registrationYear);
+
+        // Maximum years based on education level
+        $maxYears = $levelCode === '03' ? 4 : 3; // Bachelor's max 4, Diploma max 3
+        $yearOfStudy = min($yearOfStudy, $maxYears);
 
         return [
             'valid' => true,
             'nationality_code' => $nationalityCode,
             'nationality' => $nationality['country'],
             'flag' => $nationality['flag'],
+            'region' => $nationality['region'] ?? null,
             'registration_year' => $registrationYear,
             'education_level_code' => $levelCode,
             'education_level' => $educationLevel,
@@ -222,10 +238,37 @@ class AuthController extends Controller
 
         $token = $user->createToken('api-token')->plainTextToken;
 
-        return response()->json([
-            'user'  => $user,
+        // Prepare response with role-based data
+        $response = [
+            'user' => $user,
             'token' => $token,
-        ]);
+            'permissions' => [
+                'can_manage_colleges' => RolePolicy::canManageColleges($user),
+                'can_manage_degree_programmes' => RolePolicy::canManageDegreeProgrammes($user),
+                'can_manage_courses' => RolePolicy::canCreateCourse($user),
+                'can_manage_categories' => RolePolicy::canManageCategories($user),
+                'can_manage_instructors' => RolePolicy::canManageInstructors($user),
+                'can_manage_students' => RolePolicy::canManageStudent($user),
+                'can_view_students' => RolePolicy::canViewStudents($user),
+            ],
+        ];
+
+        // Include assigned programmes for instructors
+        if (RolePolicy::isInstructor($user)) {
+            $assignedProgrammeIds = RolePolicy::getAssignedProgrammeIds($user);
+            $response['assigned_programme_ids'] = $assignedProgrammeIds;
+            $response['assigned_programmes'] = DegreeProgramme::with('college')
+                ->whereIn('id', $assignedProgrammeIds)
+                ->get();
+        }
+
+        // Include degree programme for students
+        if (RolePolicy::isStudent($user) && $user->degree_programme_id) {
+            $response['degree_programme'] = DegreeProgramme::with('college')
+                ->find($user->degree_programme_id);
+        }
+
+        return response()->json($response);
     }
 
     /**

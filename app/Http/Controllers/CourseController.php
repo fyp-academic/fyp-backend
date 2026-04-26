@@ -11,16 +11,35 @@ use App\Models\Category;
 use App\Models\Enrollment;
 use App\Models\User;
 use App\Models\DegreeProgramme;
+use App\Policies\RolePolicy;
 
 class CourseController extends Controller
 {
     /**
      * GET /api/v1/courses
-     * Paginated list of courses with optional filters.
+     * Paginated list of courses with optional filters and role-based scoping.
      */
     public function index(Request $request): JsonResponse
     {
-        $query = Course::with(['category', 'instructor', 'sections.activities']);
+        $user = $request->user();
+        $query = Course::with(['category', 'instructor', 'sections.activities', 'degreeProgrammes']);
+
+        // Apply role-based filtering
+        if (RolePolicy::isInstructor($user)) {
+            $assignedProgrammeIds = RolePolicy::getAssignedProgrammeIds($user);
+
+            $query->where(function ($q) use ($user, $assignedProgrammeIds) {
+                // Courses they created
+                $q->where('instructor_id', $user->id);
+
+                // Or courses in their assigned programmes
+                if (!empty($assignedProgrammeIds)) {
+                    $q->orWhereHas('degreeProgrammes', function ($subQ) use ($assignedProgrammeIds) {
+                        $subQ->whereIn('degree_programmes.id', $assignedProgrammeIds);
+                    });
+                }
+            });
+        }
 
         if ($request->filled('status')) {
             $query->where('status', $request->status);
@@ -161,10 +180,30 @@ class CourseController extends Controller
 
     /**
      * POST /api/v1/courses
-     * Create a new course record.
+     * Create a new course record with role-based validation.
      */
     public function store(Request $request): JsonResponse
     {
+        $user = $request->user();
+
+        // Validate can create courses
+        $programmeIds = $request->input('degree_programme_ids', []);
+        if (!RolePolicy::canCreateCourse($user, $programmeIds ?: null)) {
+            return response()->json([
+                'message' => 'Forbidden. You cannot create courses for the specified programmes.',
+            ], 403);
+        }
+
+        // For instructors, validate they can only create for their assigned programmes
+        if (RolePolicy::isInstructor($user) && !empty($programmeIds)) {
+            $assignedIds = RolePolicy::getAssignedProgrammeIds($user);
+            if (!empty(array_diff($programmeIds, $assignedIds))) {
+                return response()->json([
+                    'message' => 'Forbidden. You can only create courses for your assigned programmes.',
+                ], 403);
+            }
+        }
+
         $validator = Validator::make($request->all(), [
             'name'          => 'required|string|max:255',
             'short_name'    => 'required|string|max:50',
@@ -188,7 +227,6 @@ class CourseController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $user     = $request->user();
         $category = Category::findOrFail($request->category_id);
 
         // Determine status based on visibility if not provided
@@ -243,9 +281,16 @@ class CourseController extends Controller
      * GET /api/v1/courses/{id}
      * Fetch full detail for a single course including sections and activities.
      */
-    public function show(string $id): JsonResponse
+    public function show(Request $request, string $id): JsonResponse
     {
-        $course = Course::with(['category', 'instructor', 'sections.activities'])->findOrFail($id);
+        $user = $request->user();
+        $course = Course::with(['category', 'instructor', 'sections.activities', 'degreeProgrammes'])->findOrFail($id);
+
+        // Check role-based access
+        if (!RolePolicy::canAccessCourse($user, $course)) {
+            return response()->json(['message' => 'Forbidden. You do not have access to this course.'], 403);
+        }
+
         $arr = $course->toArray();
         if (isset($arr['instructor']) && is_array($arr['instructor'])) {
             $arr['instructor'] = $arr['instructor']['name'] ?? $arr['instructor_name'] ?? 'Unknown';
@@ -287,7 +332,24 @@ class CourseController extends Controller
      */
     public function update(Request $request, string $id): JsonResponse
     {
+        $user = $request->user();
         $course = Course::findOrFail($id);
+
+        // Check can manage course
+        if (!RolePolicy::canManageCourse($user, $course)) {
+            return response()->json(['message' => 'Forbidden. You cannot manage this course.'], 403);
+        }
+
+        // For instructors, validate degree_programme_ids if provided
+        if (RolePolicy::isInstructor($user) && $request->has('degree_programme_ids')) {
+            $programmeIds = $request->input('degree_programme_ids', []);
+            $assignedIds = RolePolicy::getAssignedProgrammeIds($user);
+            if (!empty(array_diff($programmeIds, $assignedIds))) {
+                return response()->json([
+                    'message' => 'Forbidden. You can only assign your assigned programmes.',
+                ], 403);
+            }
+        }
 
         $validator = Validator::make($request->all(), [
             'name'          => 'sometimes|string|max:255',
@@ -332,9 +394,16 @@ class CourseController extends Controller
      * DELETE /api/v1/courses/{id}
      * Permanently remove a course and cascade-delete related data.
      */
-    public function destroy(string $id): JsonResponse
+    public function destroy(Request $request, string $id): JsonResponse
     {
+        $user = $request->user();
         $course = Course::findOrFail($id);
+
+        // Check can manage course
+        if (!RolePolicy::canManageCourse($user, $course)) {
+            return response()->json(['message' => 'Forbidden. You cannot delete this course.'], 403);
+        }
+
         $course->delete();
 
         return response()->json(['message' => 'Course deleted.']);

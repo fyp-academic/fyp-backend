@@ -13,7 +13,7 @@ class DegreeProgramme extends Model
     protected $keyType = 'string';
 
     protected $fillable = [
-        'id', 'college_id', 'name', 'code', 'description',
+        'id', 'college_id', 'name', 'code', 'description', 'duration_years',
     ];
 
     public function college(): BelongsTo
@@ -34,5 +34,21 @@ class DegreeProgramme extends Model
     public function instructors(): BelongsToMany
     {
         return $this->belongsToMany(User::class, 'degree_programme_instructor', 'degree_programme_id', 'instructor_id');
+    }
+
+    /**
+     * Get all course IDs associated with this degree programme.
+     */
+    public function courseIds(): array
+    {
+        return $this->courses()->pluck('courses.id')->toArray();
+    }
+
+    /**
+     * Get all student IDs enrolled in this degree programme.
+     */
+    public function studentIds(): array
+    {
+        return $this->students()->pluck('users.id')->toArray();
     }
 }
