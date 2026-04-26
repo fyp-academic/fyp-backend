@@ -396,7 +396,7 @@ Route::prefix('v1')->group(function () {
 // ─────────────────────────────────────────────────────────────────────
 // GRADES — standalone grade-item access
 // ─────────────────────────────────────────────────────────────────────
-Route::prefix('grade-items')->group(function () {
+Route::middleware('auth:sanctum')->prefix('grade-items')->group(function () {
     Route::get('/{id}',         [GradeController::class, 'show']);
     Route::post('/{id}/grades', [GradeController::class, 'submitGrade']);
 });
@@ -438,7 +438,7 @@ Route::middleware('admin.or.instructor')->prefix('categories')->group(function (
 // ─────────────────────────────────────────────────────────────────────
 // NOTIFICATIONS
 // ─────────────────────────────────────────────────────────────────────
-Route::prefix('notifications')->group(function () {
+Route::middleware('auth:sanctum')->prefix('notifications')->group(function () {
     Route::get('/',                     [NotificationController::class, 'index']);
     Route::post('mark-all-read',        [NotificationController::class, 'markAllRead']);
     Route::patch('/{id}/read',          [NotificationController::class, 'markRead']);
@@ -448,19 +448,19 @@ Route::prefix('notifications')->group(function () {
 // ─────────────────────────────────────────────────────────────────────
 // MESSAGING — conversations & messages (real-time via Reverb)
 // ─────────────────────────────────────────────────────────────────────
-Route::prefix('conversations')->group(function () {
+Route::middleware('auth:sanctum')->prefix('conversations')->group(function () {
     Route::get('/',    [ConversationController::class, 'index']);
     Route::post('/',   [ConversationController::class, 'store']);
     Route::get('/{id}/messages',  [MessageController::class, 'index']);
     Route::post('/{id}/messages', [MessageController::class, 'store']);   // supports file upload
     Route::patch('/{id}/messages/read', [MessageController::class, 'markRead']);
 });
-Route::post('messages/{id}/react', [MessageController::class, 'react']); // emoji toggle
+Route::middleware('auth:sanctum')->post('messages/{id}/react', [MessageController::class, 'react']); // emoji toggle
 
 // ─────────────────────────────────────────────────────────────────────
 // QUIZ — standalone question & answer mutations
 // ─────────────────────────────────────────────────────────────────────
-Route::prefix('questions')->group(function () {
+Route::middleware('auth:sanctum')->prefix('questions')->group(function () {
     Route::put('/{id}',    [QuizController::class, 'updateQuestion']);
     Route::delete('/{id}', [QuizController::class, 'destroyQuestion']);
     Route::get('/{id}/answers',  [QuizController::class, 'answers']);
@@ -470,12 +470,12 @@ Route::prefix('questions')->group(function () {
 // ─────────────────────────────────────────────────────────────────────
 // AI — generated question status (standalone)
 // ─────────────────────────────────────────────────────────────────────
-Route::patch('ai/generated-questions/{id}', [AIInsightController::class, 'updateQuestionStatus']);
+Route::middleware('auth:sanctum')->patch('ai/generated-questions/{id}', [AIInsightController::class, 'updateQuestionStatus']);
 
 // ─────────────────────────────────────────────────────────────────────
 // INTERVENTIONS — feedback evaluations (standalone)
 // ─────────────────────────────────────────────────────────────────────
-Route::prefix('interventions')->group(function () {
+Route::middleware('auth:sanctum')->prefix('interventions')->group(function () {
     Route::get('/{id}/evaluation',  [LearnerAnalyticsController::class, 'feedbackEvaluation']);
     Route::post('/{id}/evaluation', [LearnerAnalyticsController::class, 'submitEvaluation']);
 });
@@ -485,37 +485,37 @@ Route::prefix('interventions')->group(function () {
 // ─────────────────────────────────────────────────────────────────────
 
 // Assignment submissions
-Route::get('submissions/{id}',       [AssignmentController::class, 'show']);
-Route::put('submissions/{id}/grade', [AssignmentController::class, 'grade']);
+Route::middleware('auth:sanctum')->get('submissions/{id}',       [AssignmentController::class, 'show']);
+Route::middleware('auth:sanctum')->put('submissions/{id}/grade', [AssignmentController::class, 'grade']);
 
 // Attendance logs
-Route::prefix('attendance-sessions/{id}')->group(function () {
+Route::middleware('auth:sanctum')->prefix('attendance-sessions/{id}')->group(function () {
     Route::get('logs',       [AttendanceController::class, 'logs']);
     Route::post('logs',      [AttendanceController::class, 'recordAttendance']);
     Route::post('logs/bulk', [AttendanceController::class, 'bulkRecord']);
 });
 
 // Book chapters
-Route::put('chapters/{id}',    [BookController::class, 'update']);
-Route::delete('chapters/{id}', [BookController::class, 'destroy']);
+Route::middleware('auth:sanctum')->put('chapters/{id}',    [BookController::class, 'update']);
+Route::middleware('auth:sanctum')->delete('chapters/{id}', [BookController::class, 'destroy']);
 
 // Checklist items
-Route::put('checklist-items/{id}',    [ChecklistController::class, 'update']);
-Route::delete('checklist-items/{id}', [ChecklistController::class, 'destroy']);
+Route::middleware('auth:sanctum')->put('checklist-items/{id}',    [ChecklistController::class, 'update']);
+Route::middleware('auth:sanctum')->delete('checklist-items/{id}', [ChecklistController::class, 'destroy']);
 
 // Database fields & entries
-Route::delete('db-fields/{id}',         [DatabaseActivityController::class, 'destroyField']);
-Route::patch('db-entries/{id}/approve',  [DatabaseActivityController::class, 'approveEntry']);
-Route::delete('db-entries/{id}',         [DatabaseActivityController::class, 'destroyEntry']);
+Route::middleware('auth:sanctum')->delete('db-fields/{id}',         [DatabaseActivityController::class, 'destroyField']);
+Route::middleware('auth:sanctum')->patch('db-entries/{id}/approve',  [DatabaseActivityController::class, 'approveEntry']);
+Route::middleware('auth:sanctum')->delete('db-entries/{id}',         [DatabaseActivityController::class, 'destroyEntry']);
 
 // Feedback questions
-Route::delete('feedback-questions/{id}', [FeedbackController::class, 'destroyQuestion']);
+Route::middleware('auth:sanctum')->delete('feedback-questions/{id}', [FeedbackController::class, 'destroyQuestion']);
 
 // Folder files
-Route::delete('folder-files/{id}', [FolderController::class, 'destroy']);
+Route::middleware('auth:sanctum')->delete('folder-files/{id}', [FolderController::class, 'destroy']);
 
 // Forum discussions & posts
-Route::prefix('discussions/{id}')->group(function () {
+Route::middleware('auth:sanctum')->prefix('discussions/{id}')->group(function () {
     Route::get('posts',   [ForumController::class, 'posts']);
     Route::post('posts',  [ForumController::class, 'reply']);
     Route::patch('lock',  [ForumController::class, 'toggleLock']);
@@ -523,18 +523,18 @@ Route::prefix('discussions/{id}')->group(function () {
 });
 
 // Glossary entries
-Route::put('glossary-entries/{id}',            [GlossaryController::class, 'update']);
-Route::patch('glossary-entries/{id}/approve',  [GlossaryController::class, 'approve']);
-Route::delete('glossary-entries/{id}',         [GlossaryController::class, 'destroy']);
+Route::middleware('auth:sanctum')->put('glossary-entries/{id}',            [GlossaryController::class, 'update']);
+Route::middleware('auth:sanctum')->patch('glossary-entries/{id}/approve',  [GlossaryController::class, 'approve']);
+Route::middleware('auth:sanctum')->delete('glossary-entries/{id}',         [GlossaryController::class, 'destroy']);
 
 // Lesson pages
-Route::put('lesson-pages/{id}',    [LessonController::class, 'update']);
-Route::delete('lesson-pages/{id}', [LessonController::class, 'destroy']);
+Route::middleware('auth:sanctum')->put('lesson-pages/{id}',    [LessonController::class, 'update']);
+Route::middleware('auth:sanctum')->delete('lesson-pages/{id}', [LessonController::class, 'destroy']);
 
 // ────────────────────────────────────────────────────────────────────
 // PROFILE & PREFERENCES
 // ─────────────────────────────────────────────────────────────────────
-Route::prefix('profile')->group(function () {
+Route::middleware('auth:sanctum')->prefix('profile')->group(function () {
     Route::get('/',            [ProfileController::class, 'show']);
     Route::put('/',            [ProfileController::class, 'update']);
     Route::get('preferences',  [ProfileController::class, 'preferences']);
