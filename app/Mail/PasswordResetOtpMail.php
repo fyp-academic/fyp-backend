@@ -10,20 +10,20 @@ use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Queue\SerializesModels;
 
-class PasswordResetMail extends Mailable implements ShouldQueue
+class PasswordResetOtpMail extends Mailable implements ShouldQueue
 {
     use Queueable, SerializesModels;
 
     public function __construct(
         public readonly string $userName,
-        public readonly string $resetUrl,
-        public readonly string $expiresIn = '60 minutes',
+        public readonly string $code,
+        public readonly int $expiresInMinutes = 10,
     ) {}
 
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Reset your APES UDOM password',
+            subject: 'Password Reset Code - APES UDOM',
         );
     }
 
@@ -31,10 +31,10 @@ class PasswordResetMail extends Mailable implements ShouldQueue
     {
         $renderer = app(EmailRenderingService::class);
 
-        $html = $renderer->render('password-reset', [
-            'userName'  => $this->userName,
-            'resetUrl'  => $this->resetUrl,
-            'expiresIn' => $this->expiresIn,
+        $html = $renderer->render('password-reset-otp', [
+            'userName'         => $this->userName,
+            'code'             => $this->code,
+            'expiresInMinutes' => $this->expiresInMinutes,
         ]);
 
         return new Content(

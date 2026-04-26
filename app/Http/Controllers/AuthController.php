@@ -7,10 +7,13 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Config;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Password;
 use Illuminate\Support\Facades\Validator;
+use App\Mail\PasswordResetOtpMail;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Auth\Events\Verified;
 use Illuminate\Auth\Events\PasswordReset;
 use App\Models\User;
@@ -226,9 +229,32 @@ class AuthController extends Controller
     }
 
     /**
+     * Generate a secure 6-digit OTP for password reset and store it hashed.
+     */
+    private function generatePasswordResetOtp(string $email): string
+    {
+        $code = (string) random_int(100000, 999999);
+
+        // Delete any existing OTPs for this email
+        DB::table('password_reset_otps')->where('email', $email)->delete();
+
+        // Store new hashed OTP
+        DB::table('password_reset_otps')->insert([
+            'email'       => $email,
+            'otp_hash'    => Hash::make($code),
+            'expires_at'  => now()->addMinutes(10),
+            'created_at'  => now(),
+            'updated_at'  => now(),
+        ]);
+
+        Log::info('Password reset OTP generated for: ' . $email);
+
+        return $code;
+    }
+
+    /**
      * POST /api/v1/auth/forgot-password
-     * Send a password-reset link to the given email address.
-     * Uses custom notification for frontend URL generation.
+     * Send a password-reset OTP to the given email address.
      */
     public function forgotPassword(Request $request): JsonResponse
     {
@@ -240,31 +266,36 @@ class AuthController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        // Custom password reset using the User model's sendPasswordResetNotification
         $user = User::where('email', $request->email)->first();
 
         if ($user) {
-            $token = Password::createToken($user);
-            $user->sendPasswordResetNotification($token);
+            $code = $this->generatePasswordResetOtp($user->email);
 
-            Log::info('Password reset link sent to: ' . $request->email);
+            Mail::to($user->email)->send(new PasswordResetOtpMail(
+                userName: $user->name,
+                code: $code,
+                expiresInMinutes: 10,
+            ));
+
+            Log::info('Password reset OTP sent to: ' . $request->email);
         }
 
         // Always return success to prevent email enumeration
         return response()->json([
-            'message' => 'If this email exists in our system, a password reset link has been sent.'
+            'message' => 'If this email exists in our system, a password reset code has been sent.'
         ]);
     }
 
     /**
      * POST /api/v1/auth/reset-password
-     * Reset the user's password using the signed token from email.
+     * Reset the user's password using the OTP from email.
+     * Invalidates OTP immediately after use or on failure.
      */
     public function resetPassword(Request $request): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'token'                 => 'required|string',
             'email'                 => 'required|email',
+            'otp'                   => 'required|string|size:6',
             'password'              => 'required|string|min:8|confirmed',
         ]);
 
@@ -272,17 +303,47 @@ class AuthController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $status = Password::reset(
-            $request->only('email', 'password', 'password_confirmation', 'token'),
-            function (User $user, string $password) {
-                $user->forceFill(['password' => Hash::make($password)])->save();
-                $user->tokens()->delete();
-            }
-        );
+        $user = User::where('email', $request->email)->first();
 
-        return $status === Password::PASSWORD_RESET
-            ? response()->json(['message' => __($status)])
-            : response()->json(['message' => __($status)], 400);
+        if (!$user) {
+            return response()->json(['message' => 'Invalid email or OTP.'], 403);
+        }
+
+        // Find the OTP record
+        $otpRecord = DB::table('password_reset_otps')
+            ->where('email', $request->email)
+            ->whereNull('used_at')
+            ->first();
+
+        if (!$otpRecord) {
+            return response()->json(['message' => 'Invalid or expired OTP.'], 403);
+        }
+
+        // Check expiry
+        if (now()->isAfter($otpRecord->expires_at)) {
+            // Delete expired OTP
+            DB::table('password_reset_otps')->where('id', $otpRecord->id)->delete();
+            return response()->json(['message' => 'OTP has expired. Please request a new one.'], 403);
+        }
+
+        // Verify OTP
+        if (!Hash::check($request->otp, $otpRecord->otp_hash)) {
+            // Invalid OTP - delete it immediately for security
+            DB::table('password_reset_otps')->where('id', $otpRecord->id)->delete();
+            return response()->json(['message' => 'Invalid OTP. Please request a new code.'], 403);
+        }
+
+        // Valid OTP - mark as used and reset password
+        DB::table('password_reset_otps')->where('id', $otpRecord->id)->update(['used_at' => now()]);
+
+        $user->forceFill(['password' => Hash::make($request->password)])->save();
+        $user->tokens()->delete();
+
+        event(new PasswordReset($user));
+
+        Log::info('Password reset successful for: ' . $user->email);
+
+        return response()->json(['message' => 'Password reset successfully.']);
     }
 
     /**
