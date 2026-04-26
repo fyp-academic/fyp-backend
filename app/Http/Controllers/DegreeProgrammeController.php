@@ -200,21 +200,17 @@ class DegreeProgrammeController extends Controller
     {
         $user = $request->user();
 
-        // Check access permissions
-        if (RolePolicy::isInstructor($user) && !RolePolicy::canAccessProgramme($user, $id)) {
+        // Check authentication
+        if ($user === null) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        // Check access permissions - admins can access all, instructors only their assigned programmes
+        if (!RolePolicy::isAdmin($user) && !RolePolicy::canAccessProgramme($user, $id)) {
             return response()->json(['message' => 'Forbidden. You do not have access to this degree programme.'], 403);
         }
 
         $programme = DegreeProgramme::findOrFail($id);
-
-        // For instructors, scope to their assigned programmes
-        if (RolePolicy::isInstructor($user)) {
-            $assignedIds = RolePolicy::getAssignedProgrammeIds($user);
-            if (!in_array($id, $assignedIds)) {
-                return response()->json(['message' => 'Forbidden.'], 403);
-            }
-        }
-
         $students = $programme->students()->with('degreeProgramme')->get();
 
         return response()->json(['data' => $students]);
@@ -228,8 +224,13 @@ class DegreeProgrammeController extends Controller
     {
         $user = $request->user();
 
-        // Check access permissions
-        if (RolePolicy::isInstructor($user) && !RolePolicy::canAccessProgramme($user, $id)) {
+        // Check authentication
+        if ($user === null) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        // Check access permissions - admins can access all, instructors only their assigned programmes
+        if (!RolePolicy::isAdmin($user) && !RolePolicy::canAccessProgramme($user, $id)) {
             return response()->json(['message' => 'Forbidden. You do not have access to this degree programme.'], 403);
         }
 
