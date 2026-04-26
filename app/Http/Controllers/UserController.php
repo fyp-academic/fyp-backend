@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use App\Models\User;
+use App\Models\Instructor;
 use App\Policies\RolePolicy;
 
 class UserController extends Controller
@@ -110,5 +111,77 @@ class UserController extends Controller
         }
 
         return response()->json(['message' => 'Forbidden.'], 403);
+    }
+
+    /**
+     * GET /api/v1/instructors
+     * Return instructors with their profile data.
+     * - Admin: Can see all instructors
+     * - Instructor/Student: Cannot view instructors list
+     */
+    public function instructors(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only admins can view instructors list
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Only admins can view instructors.'], 403);
+        }
+
+        $query = Instructor::with(['user', 'college', 'degreeProgrammes'])
+            ->whereHas('user', function ($q) {
+                $q->where('role', 'instructor');
+            });
+
+        // Filter by college
+        if ($request->filled('college_id')) {
+            $query->where('college_id', $request->college_id);
+        }
+
+        // Filter by academic rank
+        if ($request->filled('academic_rank')) {
+            $query->where('academic_rank', $request->academic_rank);
+        }
+
+        // Filter by employment type
+        if ($request->filled('employment_type')) {
+            $query->where('employment_type', $request->employment_type);
+        }
+
+        // Search by name, email, or staff_id
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('full_name', 'ilike', "%{$search}%")
+                  ->orWhere('staff_id', 'ilike', "%{$search}%")
+                  ->orWhereHas('user', function ($uq) use ($search) {
+                      $uq->where('email', 'ilike', "%{$search}%");
+                  });
+            });
+        }
+
+        $instructors = $query->orderBy('created_at', 'desc')->get();
+
+        return response()->json(['data' => $instructors]);
+    }
+
+    /**
+     * GET /api/v1/instructors/{id}
+     * Get a specific instructor with full profile.
+     * - Admin: Can view any instructor
+     */
+    public function showInstructor(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only admins can view instructor details
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Only admins can view instructor details.'], 403);
+        }
+
+        $instructor = Instructor::with(['user', 'college', 'degreeProgrammes.courses', 'courses'])
+            ->findOrFail($id);
+
+        return response()->json(['data' => $instructor]);
     }
 }

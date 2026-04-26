@@ -17,6 +17,7 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Auth\Events\Verified;
 use Illuminate\Auth\Events\PasswordReset;
 use App\Models\User;
+use App\Models\Instructor;
 use App\Models\DegreeProgramme;
 use App\Policies\RolePolicy;
 use Illuminate\Support\Str;
@@ -119,29 +120,63 @@ class AuthController extends Controller
     /**
      * POST /api/v1/auth/register
      * Create a new platform account and trigger email verification.
+     * Supports Student, Instructor, and Admin registrations.
      */
     public function register(Request $request): JsonResponse
     {
-        $validator = Validator::make($request->all(), [
+        $role = $request->input('role', 'student');
+
+        // Base validation rules for all roles
+        $baseRules = [
             'name'                   => 'required|string|max:255',
             'email'                  => 'required|string|email|max:255|unique:users',
             'password'               => 'required|string|min:8|confirmed',
             'role'                   => 'sometimes|string|in:student,instructor,admin',
-            'registration_number'    => 'sometimes|nullable|string|max:30|unique:users',
-            'degree_programme_id'  => 'sometimes|nullable|string|exists:degree_programmes,id',
-            'college_id'             => 'sometimes|nullable|string|exists:colleges,id',
-        ]);
+        ];
+
+        // Role-specific validation rules
+        $roleRules = match ($role) {
+            'student' => [
+                'registration_number'    => 'required|string|max:30|unique:users',
+                'degree_programme_id'  => 'required|string|exists:degree_programmes,id',
+                'gender'                 => 'sometimes|nullable|string|in:male,female,other',
+                'phone_number'           => 'sometimes|nullable|string|max:30',
+            ],
+            'instructor' => [
+                'staff_id'               => 'required|string|max:30|unique:instructors,staff_id',
+                'college_id'             => 'required|string|exists:colleges,id',
+                'gender'                 => 'sometimes|string|in:male,female,other',
+                'phone_number'           => 'sometimes|nullable|string|max:20',
+                'national_id'            => 'sometimes|nullable|string|max:50',
+                'employment_type'        => 'sometimes|string|in:full-time,part-time,visiting',
+                'academic_rank'          => 'sometimes|string|in:assistant_lecturer,lecturer,senior_lecturer,associate_professor,professor,tutorial_assistant,graduate_assistant',
+                'date_of_employment'     => 'sometimes|nullable|date',
+                'highest_qualification'  => 'sometimes|nullable|string|max:100',
+                'field_of_specialization'=> 'sometimes|nullable|string|max:100',
+                'awarding_institution'   => 'sometimes|nullable|string|max:100',
+                'year_of_graduation'     => 'sometimes|nullable|integer|min:1900|max:' . (date('Y') + 1),
+                'bio'                    => 'sometimes|nullable|string|max:1000',
+                'office_location'        => 'sometimes|nullable|string|max:100',
+                'office_hours'           => 'sometimes|nullable|string|max:100',
+                'assigned_programme_ids' => 'sometimes|array',
+                'assigned_programme_ids.*' => 'string|exists:degree_programmes,id',
+            ],
+            default => [
+                'college_id'             => 'sometimes|nullable|string|exists:colleges,id',
+            ],
+        };
+
+        $validator = Validator::make($request->all(), array_merge($baseRules, $roleRules));
 
         if ($validator->fails()) {
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $role = $request->input('role', 'student');
         $regNo = $request->input('registration_number');
         $parsed = null;
 
-        // Parse registration number if provided (especially for students)
-        if ($regNo) {
+        // Parse registration number if provided (for students)
+        if ($regNo && $role === 'student') {
             $parsed = $this->parseRegistrationNumber($regNo);
             if (!$parsed['valid']) {
                 return response()->json([
@@ -152,6 +187,7 @@ class AuthController extends Controller
             }
         }
 
+        // Create user
         $userData = [
             'id'                    => Str::uuid()->toString(),
             'name'                  => $request->name,
@@ -164,18 +200,60 @@ class AuthController extends Controller
             'education_level'       => $parsed['education_level'] ?? $request->input('education_level'),
             'nationality'           => $parsed['nationality'] ?? $request->input('nationality'),
             'country'               => $parsed['nationality'] ?? $request->input('country'),
+            'gender'                => $request->input('gender'),
+            'phone_number'          => $request->input('phone_number'),
         ];
 
         $user = User::create($userData);
 
+        // Create instructor profile if role is instructor
+        if ($role === 'instructor') {
+            $instructorData = [
+                'user_id'                 => $user->id,
+                'full_name'               => $request->name,
+                'gender'                  => $request->input('gender'),
+                'date_of_birth'           => $request->input('date_of_birth'),
+                'nationality'             => $request->input('nationality'),
+                'phone_number'            => $request->input('phone_number'),
+                'national_id'             => $request->input('national_id'),
+                'staff_id'                => $request->input('staff_id'),
+                'employment_type'         => $request->input('employment_type', 'full-time'),
+                'academic_rank'           => $request->input('academic_rank'),
+                'college_id'              => $request->input('college_id'),
+                'date_of_employment'      => $request->input('date_of_employment'),
+                'highest_qualification'   => $request->input('highest_qualification'),
+                'field_of_specialization' => $request->input('field_of_specialization'),
+                'awarding_institution'    => $request->input('awarding_institution'),
+                'year_of_graduation'      => $request->input('year_of_graduation'),
+                'bio'                     => $request->input('bio'),
+                'office_location'         => $request->input('office_location'),
+                'office_hours'            => $request->input('office_hours'),
+                'account_status'          => 'active',
+            ];
+
+            $instructor = Instructor::create($instructorData);
+
+            // Assign degree programmes if provided
+            if ($request->has('assigned_programme_ids')) {
+                $instructor->degreeProgrammes()->attach($request->input('assigned_programme_ids'));
+            }
+        }
+
         $this->generateAndSendVerificationCode($user);
 
-        return response()->json([
+        $response = [
             'message' => 'Account created successfully. Please check your email for the verification code.',
             'user'    => $user->makeHidden(['verification_code', 'verification_code_expires_at']),
             'parsed_registration' => $parsed,
             'requires_verification' => true,
-        ], 201);
+        ];
+
+        // Include instructor data in response if applicable
+        if ($role === 'instructor' && isset($instructor)) {
+            $response['instructor'] = $instructor->load('degreeProgrammes');
+        }
+
+        return response()->json($response, 201);
     }
 
     /**

@@ -95,6 +95,14 @@ Route::prefix('v1')->group(function () {
         });
 
         // ─────────────────────────────────────────────────────────────────────
+        // INSTRUCTORS (Admin only)
+        // ─────────────────────────────────────────────────────────────────────
+        Route::middleware('strict.admin')->prefix('instructors')->group(function () {
+            Route::get('/', [UserController::class, 'instructors']);
+            Route::get('/{id}', [UserController::class, 'showInstructor']);
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
         // PUBLIC COURSE CATALOG (for students to browse and self-enroll)
         // ─────────────────────────────────────────────────────────────────────
         Route::get('/courses/catalog', [CourseController::class, 'catalog']);

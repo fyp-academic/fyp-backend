@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Facades\Log;
@@ -37,6 +38,8 @@ class User extends Authenticatable
         'year_of_study',
         'education_level',
         'nationality',
+        'gender',
+        'phone_number',
         'bio',
         'department',
         'institution',
@@ -150,5 +153,21 @@ class User extends Authenticatable
     public function assignedDegreeProgrammes(): BelongsToMany
     {
         return $this->belongsToMany(DegreeProgramme::class, 'degree_programme_instructor', 'instructor_id', 'degree_programme_id');
+    }
+
+    /**
+     * Get the instructor profile associated with this user (if role is instructor).
+     */
+    public function instructor(): HasOne
+    {
+        return $this->hasOne(Instructor::class);
+    }
+
+    /**
+     * Check if user has an instructor profile.
+     */
+    public function hasInstructorProfile(): bool
+    {
+        return $this->role === 'instructor' && $this->instructor !== null;
     }
 }
