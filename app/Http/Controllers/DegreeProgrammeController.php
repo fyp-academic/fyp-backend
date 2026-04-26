@@ -200,17 +200,13 @@ class DegreeProgrammeController extends Controller
     {
         $user = $request->user();
 
-        // Check authentication
-        if ($user === null) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
-        }
+        $programme = DegreeProgramme::findOrFail($id);
 
-        // Check access permissions - admins can access all, instructors only their assigned programmes
-        if (!RolePolicy::isAdmin($user) && !RolePolicy::canAccessProgramme($user, $id)) {
+        // Check access permissions (same logic as show() method)
+        if (RolePolicy::isInstructor($user) && !RolePolicy::canAccessProgramme($user, $id)) {
             return response()->json(['message' => 'Forbidden. You do not have access to this degree programme.'], 403);
         }
 
-        $programme = DegreeProgramme::findOrFail($id);
         $students = $programme->students()->with('degreeProgramme')->get();
 
         return response()->json(['data' => $students]);
@@ -224,17 +220,13 @@ class DegreeProgrammeController extends Controller
     {
         $user = $request->user();
 
-        // Check authentication
-        if ($user === null) {
-            return response()->json(['message' => 'Unauthenticated.'], 401);
-        }
+        $programme = DegreeProgramme::findOrFail($id);
 
-        // Check access permissions - admins can access all, instructors only their assigned programmes
-        if (!RolePolicy::isAdmin($user) && !RolePolicy::canAccessProgramme($user, $id)) {
+        // Check access permissions (same logic as show() method)
+        if (RolePolicy::isInstructor($user) && !RolePolicy::canAccessProgramme($user, $id)) {
             return response()->json(['message' => 'Forbidden. You do not have access to this degree programme.'], 403);
         }
 
-        $programme = DegreeProgramme::findOrFail($id);
         $courses = $programme->courses()->with('instructor')->get();
 
         return response()->json(['data' => $courses]);
