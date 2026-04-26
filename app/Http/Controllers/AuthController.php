@@ -617,7 +617,70 @@ class AuthController extends Controller
      */
     public function me(Request $request): JsonResponse
     {
-        return response()->json($request->user());
+        $user = $request->user();
+
+        // Load instructor profile for instructors
+        if ($user->role === 'instructor') {
+            $user->load('instructor');
+        }
+
+        // Load degree programme for students
+        if ($user->role === 'student' && $user->degree_programme_id) {
+            $user->load('degreeProgramme.college');
+        }
+
+        // Load assigned degree programmes for instructors
+        if ($user->role === 'instructor') {
+            $user->load('assignedDegreeProgrammes.college');
+        }
+
+        // Determine profile image URL (instructor photo takes priority for instructors)
+        $profileImageUrl = null;
+        if ($user->role === 'instructor' && $user->instructor && $user->instructor->profile_photo) {
+            $profileImageUrl = url('storage/' . $user->instructor->profile_photo);
+        } elseif ($user->profile_image) {
+            $profileImageUrl = url('storage/' . $user->profile_image);
+        }
+
+        $data = [
+            'id' => $user->id,
+            'name' => $user->name,
+            'email' => $user->email,
+            'role' => $user->role,
+            'bio' => $user->bio,
+            'department' => $user->department,
+            'institution' => $user->institution,
+            'country' => $user->country,
+            'timezone' => $user->timezone,
+            'language' => $user->language,
+            'phone_number' => $user->phone_number,
+            'gender' => $user->gender,
+            'nationality' => $user->nationality,
+            'year_of_study' => $user->year_of_study,
+            'education_level' => $user->education_level,
+            'registration_number' => $user->registration_number,
+            'profile_image' => $user->profile_image,
+            'profile_image_url' => $profileImageUrl,
+        ];
+
+        // Add role-specific data
+        if ($user->role === 'instructor' && $user->instructor) {
+            $data['instructor_profile'] = $user->instructor;
+            $data['assigned_degree_programmes'] = $user->assignedDegreeProgrammes;
+
+            if ($user->instructor->college_id) {
+                $data['college'] = $user->instructor->college;
+            }
+        }
+
+        if ($user->role === 'student') {
+            if ($user->degreeProgramme) {
+                $data['degree_programme'] = $user->degreeProgramme;
+                $data['college'] = $user->degreeProgramme->college;
+            }
+        }
+
+        return response()->json(['data' => $data]);
     }
 
     /**

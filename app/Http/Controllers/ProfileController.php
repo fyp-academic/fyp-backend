@@ -174,7 +174,9 @@ class ProfileController extends Controller
 
         return response()->json([
             'message' => 'Profile image uploaded successfully.',
-            'profile_image_url' => asset('storage/' . $path)
+            'data' => [
+                'profile_image_url' => asset('storage/' . $path)
+            ]
         ]);
     }
 
@@ -215,7 +217,9 @@ class ProfileController extends Controller
 
         return response()->json([
             'message' => 'Instructor profile photo uploaded successfully.',
-            'profile_photo_url' => asset('storage/' . $path)
+            'data' => [
+                'profile_image_url' => asset('storage/' . $path)
+            ]
         ]);
     }
 
