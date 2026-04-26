@@ -2,12 +2,12 @@
 
 namespace App\Mail;
 
-use App\Services\EmailRenderingService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Mail\Mailable;
 use Illuminate\Mail\Mailables\Content;
 use Illuminate\Mail\Mailables\Envelope;
+use Illuminate\Mail\Mailables\Address;
 use Illuminate\Queue\SerializesModels;
 
 class PasswordResetOtpMail extends Mailable implements ShouldQueue
@@ -24,21 +24,28 @@ class PasswordResetOtpMail extends Mailable implements ShouldQueue
     {
         return new Envelope(
             subject: 'Password Reset Code - APES UDOM',
+            from: new Address(
+                config('mail.from.address', 'noreply@codagenz.com'),
+                config('mail.from.name', 'APES UDOM')
+            ),
+            replyTo: [
+                new Address(
+                    config('mail.reply_to.address', 'support@codagenz.com'),
+                    config('mail.reply_to.name', 'APES UDOM Support')
+                ),
+            ],
         );
     }
 
     public function content(): Content
     {
-        $renderer = app(EmailRenderingService::class);
-
-        $html = $renderer->render('password-reset-otp', [
-            'userName'         => $this->userName,
-            'code'             => $this->code,
-            'expiresInMinutes' => $this->expiresInMinutes,
-        ]);
-
         return new Content(
-            html: $html,
+            html: 'emails.password-reset-otp',
+            with: [
+                'userName' => $this->userName,
+                'code' => $this->code,
+                'expiresInMinutes' => $this->expiresInMinutes,
+            ],
         );
     }
 
