@@ -92,7 +92,7 @@ class User extends Authenticatable
 
         Log::info('Sending OTP verification email to: ' . $this->email);
 
-        Mail::to($this->email)->queue(new OtpVerificationMail(
+        Mail::to($this->email)->send(new OtpVerificationMail(
             userName: $this->name,
             code: $code,
             expiresInMinutes: 10,

@@ -371,8 +371,20 @@ class AuthController extends Controller
             ]);
         }
 
+        // Check if code exists
+        if (!$user->verification_code) {
+            return response()->json([
+                'message' => 'No verification code found. Please request a new one.',
+            ], 403);
+        }
+
         // Check code expiry
         if (!$user->verification_code_expires_at || now()->isAfter($user->verification_code_expires_at)) {
+            // Clear expired code
+            $user->forceFill([
+                'verification_code' => null,
+                'verification_code_expires_at' => null,
+            ])->save();
             return response()->json([
                 'message' => 'Verification code has expired. Please request a new one.',
                 'expired' => true,
@@ -380,9 +392,14 @@ class AuthController extends Controller
         }
 
         // Check code validity (hashed)
-        if (!$user->verification_code || !Hash::check($request->code, $user->verification_code)) {
+        if (!Hash::check($request->code, $user->verification_code)) {
+            // Invalid code - clear it immediately for security
+            $user->forceFill([
+                'verification_code' => null,
+                'verification_code_expires_at' => null,
+            ])->save();
             return response()->json([
-                'message' => 'Invalid verification code.',
+                'message' => 'Invalid verification code. Please request a new code.',
             ], 403);
         }
 
