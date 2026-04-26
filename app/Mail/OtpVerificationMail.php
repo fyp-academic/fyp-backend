@@ -30,7 +30,7 @@ class OtpVerificationMail extends Mailable implements ShouldQueue
             ),
             replyTo: [
                 new Address(
-                    config('mail.reply_to.address', 'support@codagenz.com'),
+                    config('mail.reply_to.address', 'codagenz10@gmail.com'),
                     config('mail.reply_to.name', 'APES UDOM Support')
                 ),
             ],
