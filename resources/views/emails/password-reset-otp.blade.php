@@ -144,8 +144,8 @@
             </div>
         </div>
         <div class="footer">
-            <p>Need help? Contact us at <a href="mailto:support@codagenz.com">support@codagenz.com</a></p>
-            <p>University of Dodoma &middot; Tanzania</p>
+            <p>Need help? Contact us at <a href="mailto:codagenz10@gmail.com">codagenz10@gmail.com</a></p>
+            <p>Apes Udom &middot; Tanzania</p>
         </div>
     </div>
 </body>

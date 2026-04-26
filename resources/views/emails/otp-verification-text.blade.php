@@ -14,6 +14,6 @@ Please enter it promptly to secure your account.
 
 If you did not create an account, you can safely ignore this email.
 
-Need help? Contact us at support@codagenz.com
+Need help? Contact us at codagenz10@gmail.com
 
-University of Dodoma · Tanzania
+Apes Udom · Tanzania
