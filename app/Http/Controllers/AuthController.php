@@ -229,32 +229,25 @@ class AuthController extends Controller
     }
 
     /**
-     * Generate a secure 6-digit OTP for password reset and store it hashed.
+     * Generate a secure 6-digit password reset code, store it hashed on user.
      */
-    private function generatePasswordResetOtp(string $email): string
+    private function generatePasswordResetCode(User $user): string
     {
         $code = (string) random_int(100000, 999999);
 
-        // Delete any existing OTPs for this email
-        DB::table('password_reset_otps')->where('email', $email)->delete();
+        $user->forceFill([
+            'password_reset_code' => Hash::make($code),
+            'password_reset_expires_at' => now()->addMinutes(10),
+        ])->save();
 
-        // Store new hashed OTP
-        DB::table('password_reset_otps')->insert([
-            'email'       => $email,
-            'otp_hash'    => Hash::make($code),
-            'expires_at'  => now()->addMinutes(10),
-            'created_at'  => now(),
-            'updated_at'  => now(),
-        ]);
-
-        Log::info('Password reset OTP generated for: ' . $email);
+        Log::info('Password reset code generated for user: ' . $user->email);
 
         return $code;
     }
 
     /**
      * POST /api/v1/auth/forgot-password
-     * Send a password-reset OTP to the given email address.
+     * Send a password-reset code to the given email address.
      */
     public function forgotPassword(Request $request): JsonResponse
     {
@@ -269,7 +262,7 @@ class AuthController extends Controller
         $user = User::where('email', $request->email)->first();
 
         if ($user) {
-            $code = $this->generatePasswordResetOtp($user->email);
+            $code = $this->generatePasswordResetCode($user);
 
             Mail::to($user->email)->send(new PasswordResetOtpMail(
                 userName: $user->name,
@@ -277,7 +270,7 @@ class AuthController extends Controller
                 expiresInMinutes: 10,
             ));
 
-            Log::info('Password reset OTP sent to: ' . $request->email);
+            Log::info('Password reset code sent to: ' . $request->email);
         }
 
         // Always return success to prevent email enumeration
@@ -288,8 +281,8 @@ class AuthController extends Controller
 
     /**
      * POST /api/v1/auth/reset-password
-     * Reset the user's password using the OTP from email.
-     * Invalidates OTP immediately after use or on failure.
+     * Reset the user's password using the code from email.
+     * Invalidates code immediately after use or on failure.
      */
     public function resetPassword(Request $request): JsonResponse
     {
@@ -306,37 +299,41 @@ class AuthController extends Controller
         $user = User::where('email', $request->email)->first();
 
         if (!$user) {
-            return response()->json(['message' => 'Invalid email or OTP.'], 403);
+            return response()->json(['message' => 'Invalid email or code.'], 403);
         }
 
-        // Find the OTP record
-        $otpRecord = DB::table('password_reset_otps')
-            ->where('email', $request->email)
-            ->whereNull('used_at')
-            ->first();
-
-        if (!$otpRecord) {
-            return response()->json(['message' => 'Invalid or expired OTP.'], 403);
+        // Check if code exists
+        if (!$user->password_reset_code) {
+            return response()->json(['message' => 'Invalid or expired code.'], 403);
         }
 
         // Check expiry
-        if (now()->isAfter($otpRecord->expires_at)) {
-            // Delete expired OTP
-            DB::table('password_reset_otps')->where('id', $otpRecord->id)->delete();
-            return response()->json(['message' => 'OTP has expired. Please request a new one.'], 403);
+        if ($user->password_reset_expires_at && now()->isAfter($user->password_reset_expires_at)) {
+            // Clear expired code
+            $user->forceFill([
+                'password_reset_code' => null,
+                'password_reset_expires_at' => null,
+            ])->save();
+            return response()->json(['message' => 'Code has expired. Please request a new one.'], 403);
         }
 
-        // Verify OTP
-        if (!Hash::check($request->otp, $otpRecord->otp_hash)) {
-            // Invalid OTP - delete it immediately for security
-            DB::table('password_reset_otps')->where('id', $otpRecord->id)->delete();
-            return response()->json(['message' => 'Invalid OTP. Please request a new code.'], 403);
+        // Verify code
+        if (!Hash::check($request->otp, $user->password_reset_code)) {
+            // Invalid code - clear it immediately for security
+            $user->forceFill([
+                'password_reset_code' => null,
+                'password_reset_expires_at' => null,
+            ])->save();
+            return response()->json(['message' => 'Invalid code. Please request a new code.'], 403);
         }
 
-        // Valid OTP - mark as used and reset password
-        DB::table('password_reset_otps')->where('id', $otpRecord->id)->update(['used_at' => now()]);
+        // Valid code - clear it and reset password
+        $user->forceFill([
+            'password' => Hash::make($request->password),
+            'password_reset_code' => null,
+            'password_reset_expires_at' => null,
+        ])->save();
 
-        $user->forceFill(['password' => Hash::make($request->password)])->save();
         $user->tokens()->delete();
 
         event(new PasswordReset($user));
