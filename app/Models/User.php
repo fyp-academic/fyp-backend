@@ -3,7 +3,6 @@
 namespace App\Models;
 
 use App\Mail\OtpVerificationMail;
-use App\Notifications\CustomResetPassword;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -102,16 +101,17 @@ class User extends Authenticatable
     }
 
     /**
-     * FIXED: Password reset notification
+     * Send password reset notification.
+     * NOTE: Our OTP flow handles email sending in AuthController::forgotPassword().
+     * This method is kept for Laravel compatibility but the actual OTP email
+     * is sent immediately when the code is generated (before hashing).
      * DO NOT type-hint or add return type
      */
     public function sendPasswordResetNotification($token)
     {
-        Log::info('Sending password reset email to: ' . $this->email);
-
-        $this->notify(new CustomResetPassword($token));
-
-        Log::info('Password reset email dispatched');
+        // OTP emails are sent directly from AuthController::forgotPassword()
+        // This method is required by Laravel's CanResetPassword trait
+        Log::info('Password reset notification triggered for: ' . $this->email . ' (OTP flow handles email separately)');
     }
 
     /**

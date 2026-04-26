@@ -10,7 +10,7 @@ use Illuminate\Mail\Mailables\Envelope;
 use Illuminate\Mail\Mailables\Address;
 use Illuminate\Queue\SerializesModels;
 
-class PasswordResetOtpMail extends Mailable implements ShouldQueue
+class PasswordResetOtpMail extends Mailable
 {
     use Queueable, SerializesModels;
 
