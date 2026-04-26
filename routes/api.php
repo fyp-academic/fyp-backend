@@ -537,6 +537,9 @@ Route::middleware('auth:sanctum')->delete('lesson-pages/{id}', [LessonController
 Route::middleware('auth:sanctum')->prefix('profile')->group(function () {
     Route::get('/',            [ProfileController::class, 'show']);
     Route::put('/',            [ProfileController::class, 'update']);
+    Route::post('image',       [ProfileController::class, 'uploadImage']);
+    Route::delete('image',      [ProfileController::class, 'removeImage']);
+    Route::post('instructor/image', [ProfileController::class, 'uploadInstructorImage']);
     Route::get('preferences',  [ProfileController::class, 'preferences']);
     Route::put('preferences',  [ProfileController::class, 'updatePreferences']);
 });

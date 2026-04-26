@@ -40,6 +40,7 @@ class User extends Authenticatable
         'nationality',
         'gender',
         'phone_number',
+        'profile_image',
         'bio',
         'department',
         'institution',
