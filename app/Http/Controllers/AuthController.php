@@ -262,6 +262,17 @@ class AuthController extends Controller
         $user = User::where('email', $request->email)->first();
 
         if ($user) {
+            // Throttle password reset requests to prevent abuse (1 per minute)
+            $lastSend = Cache::get('password_reset_' . $user->id);
+            if ($lastSend && now()->diffInSeconds($lastSend) < 60) {
+                return response()->json([
+                    'message' => 'Please wait before requesting another password reset code.',
+                    'retry_after' => 60 - now()->diffInSeconds($lastSend),
+                ], 429);
+            }
+
+            Cache::put('password_reset_' . $user->id, now(), 60);
+
             $code = $this->generatePasswordResetCode($user);
 
             Mail::to($user->email)->send(new PasswordResetOtpMail(
