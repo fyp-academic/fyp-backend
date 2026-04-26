@@ -19,7 +19,7 @@ class Notification extends Model
     {
         return [
             'read'       => 'boolean',
-            'created_at' => 'datetime',
+            'timestamp'  => 'datetime',
         ];
     }
 
