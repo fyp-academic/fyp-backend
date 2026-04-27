@@ -316,8 +316,61 @@ Route::prefix('v1')->group(function () {
             Route::get('/{id}/messages',  [MessageController::class, 'index']);
             Route::post('/{id}/messages', [MessageController::class, 'store']);   // supports file upload
             Route::patch('/{id}/messages/read', [MessageController::class, 'markRead']);
+            Route::get('/{id}/pinned-messages', [MessageController::class, 'pinnedMessages']);
+            Route::post('/{id}/typing', [MessageController::class, 'typing']);
         });
         Route::post('messages/{id}/react', [MessageController::class, 'react']); // emoji toggle
+        Route::delete('messages/{id}', [MessageController::class, 'destroy']); // soft delete
+        Route::patch('messages/{id}/restore', [MessageController::class, 'restore']); // restore deleted
+        Route::post('messages/{id}/pin', [MessageController::class, 'pin']); // pin/unpin
+        Route::post('messages/{id}/delivered', [MessageController::class, 'markDelivered']); // delivery status
+        Route::post('messages/{id}/read', [MessageController::class, 'markMessageRead']); // read status
+
+        // ─────────────────────────────────────────────────────────────────────
+        // STRUCTURED CHAT ACCESS — course & programme chats
+        // ─────────────────────────────────────────────────────────────────────
+        Route::prefix('chat')->group(function () {
+            Route::get('/eligible-recipients', [\App\Http\Controllers\ChatAccessController::class, 'eligibleRecipients']);
+            Route::get('/my-chats', [\App\Http\Controllers\ChatAccessController::class, 'myChats']);
+            Route::get('/available-courses', [\App\Http\Controllers\ChatAccessController::class, 'availableCourses']);
+            Route::get('/available-programmes', [\App\Http\Controllers\ChatAccessController::class, 'availableProgrammes']);
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // COURSE CHAT — structured course communication
+        // ─────────────────────────────────────────────────────────────────────
+        Route::prefix('courses/{courseId}')->group(function () {
+            Route::get('/chat', [\App\Http\Controllers\CourseChatController::class, 'getOrCreate']);
+            Route::get('/chat/participants', [\App\Http\Controllers\CourseChatController::class, 'participants']);
+            Route::post('/chat/sync-participants', [\App\Http\Controllers\CourseChatController::class, 'syncParticipants']);
+            Route::post('/chat/announcement', [\App\Http\Controllers\CourseChatController::class, 'postAnnouncement']);
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // PROGRAMME CHAT — structured programme communication
+        // ─────────────────────────────────────────────────────────────────────
+        Route::prefix('degree-programmes/{programmeId}')->group(function () {
+            Route::get('/chat', [\App\Http\Controllers\ProgrammeChatController::class, 'getOrCreate']);
+            Route::get('/chat/participants', [\App\Http\Controllers\ProgrammeChatController::class, 'participants']);
+            Route::post('/chat/sync-participants', [\App\Http\Controllers\ProgrammeChatController::class, 'syncParticipants']);
+            Route::post('/chat/announcement', [\App\Http\Controllers\ProgrammeChatController::class, 'postAnnouncement']);
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // CHAT MODERATION — admin/instructor chat management
+        // ─────────────────────────────────────────────────────────────────────
+        Route::prefix('chat-moderation')->group(function () {
+            Route::get('/reports', [\App\Http\Controllers\ChatReportController::class, 'index']);
+            Route::get('/reports/{id}', [\App\Http\Controllers\ChatReportController::class, 'show']);
+            Route::post('/reports', [\App\Http\Controllers\ChatReportController::class, 'store']);
+            Route::post('/reports/{id}/resolve', [\App\Http\Controllers\ChatReportController::class, 'resolve']);
+            Route::get('/statistics', [\App\Http\Controllers\ChatReportController::class, 'statistics']);
+            Route::get('/conversations', [\App\Http\Controllers\ChatReportController::class, 'conversations']);
+            Route::post('/conversations/{id}/toggle-lock', [\App\Http\Controllers\ChatReportController::class, 'toggleConversationLock']);
+            Route::get('/blocked-users', [\App\Http\Controllers\ChatReportController::class, 'blockedUsers']);
+            Route::post('/block-user', [\App\Http\Controllers\ChatReportController::class, 'blockUser']);
+            Route::post('/unblock-user', [\App\Http\Controllers\ChatReportController::class, 'unblockUser']);
+        });
 
         // ─────────────────────────────────────────────────────────────────────
         // QUIZ — standalone question & answer mutations

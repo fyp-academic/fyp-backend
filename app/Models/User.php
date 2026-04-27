@@ -146,6 +146,23 @@ class User extends Authenticatable
         return $this->hasMany(UserPreference::class);
     }
 
+    public function conversationParticipants(): HasMany
+    {
+        return $this->hasMany(ConversationParticipant::class);
+    }
+
+    public function allConversations(): BelongsToMany
+    {
+        return $this->belongsToMany(Conversation::class, 'conversation_participants')
+            ->withPivot(['role', 'joined_at', 'last_read_at', 'unread_count', 'is_blocked'])
+            ->withTimestamps();
+    }
+
+    public function presence(): HasOne
+    {
+        return $this->hasOne(UserPresence::class);
+    }
+
     public function degreeProgramme(): BelongsTo
     {
         return $this->belongsTo(DegreeProgramme::class);
@@ -170,5 +187,29 @@ class User extends Authenticatable
     public function hasInstructorProfile(): bool
     {
         return $this->role === 'instructor' && $this->instructor !== null;
+    }
+
+    /**
+     * Check if user is an admin.
+     */
+    public function isAdmin(): bool
+    {
+        return $this->role === 'admin';
+    }
+
+    /**
+     * Check if user is an instructor.
+     */
+    public function isInstructor(): bool
+    {
+        return $this->role === 'instructor';
+    }
+
+    /**
+     * Check if user is a student.
+     */
+    public function isStudent(): bool
+    {
+        return $this->role === 'student';
     }
 }
