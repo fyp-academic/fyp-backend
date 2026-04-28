@@ -14,7 +14,7 @@ class RolePolicy
      */
     public static function isAdmin(User $user): bool
     {
-        return $user->role === 'admin';
+        return strtolower(trim($user->role ?? '')) === 'admin';
     }
 
     /**
@@ -22,7 +22,7 @@ class RolePolicy
      */
     public static function isInstructor(User $user): bool
     {
-        return $user->role === 'instructor';
+        return strtolower(trim($user->role ?? '')) === 'instructor';
     }
 
     /**
@@ -30,7 +30,7 @@ class RolePolicy
      */
     public static function isStudent(User $user): bool
     {
-        return $user->role === 'student';
+        return strtolower(trim($user->role ?? '')) === 'student';
     }
 
     /**
@@ -38,7 +38,8 @@ class RolePolicy
      */
     public static function isAdminOrInstructor(User $user): bool
     {
-        return in_array($user->role, ['admin', 'instructor'], true);
+        $role = strtolower(trim($user->role ?? ''));
+        return in_array($role, ['admin', 'instructor'], true);
     }
 
     /**
