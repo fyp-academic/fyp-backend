@@ -239,13 +239,29 @@ class AuthController extends Controller
             }
         }
 
-        $this->generateAndSendVerificationCode($user);
+        // Check if admin is creating user with auto-verify flag
+        $autoVerify = $request->boolean('auto_verify');
+        $requestingUser = $request->user();
+        $isAdminCreating = $requestingUser && RolePolicy::isAdmin($requestingUser) && $autoVerify;
+
+        if ($isAdminCreating) {
+            // Auto-verify: set email_verified_at and skip OTP
+            $user->forceFill([
+                'email_verified_at' => now(),
+            ])->save();
+        } else {
+            // Normal flow: send verification code
+            $this->generateAndSendVerificationCode($user);
+        }
 
         $response = [
-            'message' => 'Account created successfully. Please check your email for the verification code.',
+            'message' => $isAdminCreating
+                ? 'Account created successfully. User can login immediately.'
+                : 'Account created successfully. Please check your email for the verification code.',
             'user'    => $user->makeHidden(['verification_code', 'verification_code_expires_at']),
             'parsed_registration' => $parsed,
-            'requires_verification' => true,
+            'requires_verification' => !$isAdminCreating,
+            'verified' => $isAdminCreating,
         ];
 
         // Include instructor data in response if applicable
