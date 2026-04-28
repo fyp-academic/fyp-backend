@@ -94,12 +94,20 @@ Route::prefix('v1')->group(function () {
             Route::get('/{id}', [UserController::class, 'show']);
         });
 
+        // User update & delete (Admin only)
+        Route::middleware('strict.admin')->prefix('users')->group(function () {
+            Route::put('/{id}', [UserController::class, 'update']);
+            Route::delete('/{id}', [UserController::class, 'destroy']);
+        });
+
         // ─────────────────────────────────────────────────────────────────────
         // INSTRUCTORS (Admin only)
         // ─────────────────────────────────────────────────────────────────────
         Route::middleware('strict.admin')->prefix('instructors')->group(function () {
             Route::get('/', [UserController::class, 'instructors']);
             Route::get('/{id}', [UserController::class, 'showInstructor']);
+            Route::put('/{id}', [UserController::class, 'updateInstructor']);
+            Route::delete('/{id}', [UserController::class, 'destroyInstructor']);
         });
 
         // ─────────────────────────────────────────────────────────────────────

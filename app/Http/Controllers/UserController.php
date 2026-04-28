@@ -184,4 +184,177 @@ class UserController extends Controller
 
         return response()->json(['data' => $instructor]);
     }
+
+    /**
+     * PUT /api/v1/users/{id}
+     * Update a student user.
+     */
+    public function update(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only admins can update users
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Only admins can update users.'], 403);
+        }
+
+        $targetUser = User::findOrFail($id);
+
+        // Validate based on role
+        if ($targetUser->role === 'student') {
+            $validated = $request->validate([
+                'name' => 'sometimes|string|max:255',
+                'email' => 'sometimes|email|unique:users,email,' . $id,
+                'registration_number' => 'sometimes|string|max:30|unique:users,registration_number,' . $id,
+                'degree_programme_id' => 'sometimes|string|exists:degree_programmes,id',
+                'gender' => 'sometimes|nullable|string|in:male,female,other',
+                'phone_number' => 'sometimes|nullable|string|max:30',
+                'year_of_study' => 'sometimes|integer|min:1|max:7',
+                'education_level' => 'sometimes|string|in:certificate,diploma,bachelor,master,phd',
+                'nationality' => 'sometimes|nullable|string|max:50',
+            ]);
+        } else {
+            // For non-students, basic fields only
+            $validated = $request->validate([
+                'name' => 'sometimes|string|max:255',
+                'email' => 'sometimes|email|unique:users,email,' . $id,
+            ]);
+        }
+
+        $targetUser->update($validated);
+
+        return response()->json([
+            'message' => 'User updated successfully.',
+            'data' => $targetUser->fresh()->load('degreeProgramme.college'),
+        ]);
+    }
+
+    /**
+     * PUT /api/v1/instructors/{id}
+     * Update an instructor profile.
+     */
+    public function updateInstructor(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only admins can update instructors
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Only admins can update instructors.'], 403);
+        }
+
+        $instructor = Instructor::findOrFail($id);
+        $targetUser = $instructor->user;
+
+        $validated = $request->validate([
+            // User fields
+            'name' => 'sometimes|string|max:255',
+            'email' => 'sometimes|email|unique:users,email,' . $targetUser->id,
+            'gender' => 'sometimes|nullable|string|in:male,female,other',
+            'phone_number' => 'sometimes|nullable|string|max:20',
+            // Instructor fields
+            'staff_id' => 'sometimes|string|max:30|unique:instructors,staff_id,' . $id,
+            'college_id' => 'sometimes|string|exists:colleges,id',
+            'national_id' => 'sometimes|nullable|string|max:50',
+            'employment_type' => 'sometimes|string|in:full-time,part-time,visiting',
+            'academic_rank' => 'sometimes|string|in:assistant_lecturer,lecturer,senior_lecturer,associate_professor,professor,tutorial_assistant,graduate_assistant',
+            'date_of_employment' => 'sometimes|nullable|date',
+            'highest_qualification' => 'sometimes|nullable|string|max:100',
+            'field_of_specialization' => 'sometimes|nullable|string|max:100',
+            'awarding_institution' => 'sometimes|nullable|string|max:100',
+            'year_of_graduation' => 'sometimes|nullable|integer|min:1900|max:' . (date('Y') + 1),
+            'bio' => 'sometimes|nullable|string|max:1000',
+            'office_location' => 'sometimes|nullable|string|max:100',
+            'office_hours' => 'sometimes|nullable|string|max:100',
+            'assigned_programme_ids' => 'sometimes|array',
+            'assigned_programme_ids.*' => 'string|exists:degree_programmes,id',
+        ]);
+
+        // Update user fields
+        $userFields = array_intersect_key($validated, array_flip(['name', 'email', 'gender', 'phone_number']));
+        if (!empty($userFields)) {
+            $targetUser->update($userFields);
+        }
+
+        // Update instructor fields
+        $instructorFields = array_diff_key($validated, array_flip(['name', 'email', 'gender', 'phone_number', 'assigned_programme_ids']));
+        if (!empty($instructorFields)) {
+            $instructor->update($instructorFields);
+        }
+
+        // Update assigned programmes if provided
+        if (isset($validated['assigned_programme_ids'])) {
+            $instructor->degreeProgrammes()->sync($validated['assigned_programme_ids']);
+        }
+
+        return response()->json([
+            'message' => 'Instructor updated successfully.',
+            'data' => $instructor->fresh()->load(['user', 'college', 'degreeProgrammes']),
+        ]);
+    }
+
+    /**
+     * DELETE /api/v1/users/{id}
+     * Delete a user.
+     */
+    public function destroy(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only admins can delete users
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Only admins can delete users.'], 403);
+        }
+
+        // Prevent self-deletion
+        if ($user->id === $id) {
+            return response()->json(['message' => 'Cannot delete your own account.'], 422);
+        }
+
+        $targetUser = User::findOrFail($id);
+
+        // Delete associated instructor profile if exists
+        if ($targetUser->role === 'instructor' && $targetUser->instructor) {
+            $targetUser->instructor->degreeProgrammes()->detach();
+            $targetUser->instructor->delete();
+        }
+
+        $targetUser->delete();
+
+        return response()->json(['message' => 'User deleted successfully.']);
+    }
+
+    /**
+     * DELETE /api/v1/instructors/{id}
+     * Delete an instructor (user + profile).
+     */
+    public function destroyInstructor(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only admins can delete instructors
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Only admins can delete instructors.'], 403);
+        }
+
+        $instructor = Instructor::findOrFail($id);
+        $targetUser = $instructor->user;
+
+        // Prevent self-deletion
+        if ($targetUser && $targetUser->id === $user->id) {
+            return response()->json(['message' => 'Cannot delete your own account.'], 422);
+        }
+
+        // Detach programmes
+        $instructor->degreeProgrammes()->detach();
+
+        // Delete instructor profile
+        $instructor->delete();
+
+        // Delete user
+        if ($targetUser) {
+            $targetUser->delete();
+        }
+
+        return response()->json(['message' => 'Instructor deleted successfully.']);
+    }
 }
