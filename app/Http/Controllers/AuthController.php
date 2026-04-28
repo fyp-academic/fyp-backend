@@ -21,6 +21,7 @@ use App\Models\Instructor;
 use App\Models\DegreeProgramme;
 use App\Policies\RolePolicy;
 use Illuminate\Support\Str;
+use Laravel\Sanctum\PersonalAccessToken;
 
 class AuthController extends Controller
 {
@@ -115,6 +116,33 @@ class AuthController extends Controller
         Log::info('Verification code generated for user: ' . $user->email);
 
         return $code;
+    }
+
+    /**
+     * Extract and verify user from Bearer token in Authorization header.
+     * Used for admin auto-verify when endpoint is public (no auth middleware).
+     */
+    private function getUserFromToken(Request $request): ?User
+    {
+        $authHeader = $request->header('Authorization');
+        if (!$authHeader || !str_starts_with($authHeader, 'Bearer ')) {
+            return null;
+        }
+
+        $token = substr($authHeader, 7); // Remove 'Bearer ' prefix
+
+        $accessToken = PersonalAccessToken::findToken($token);
+        if (!$accessToken) {
+            return null;
+        }
+
+        // Check if token belongs to a user
+        $tokenable = $accessToken->tokenable;
+        if ($tokenable instanceof User) {
+            return $tokenable;
+        }
+
+        return null;
     }
 
     /**
@@ -242,6 +270,12 @@ class AuthController extends Controller
         // Check if admin is creating user with auto-verify flag
         $autoVerify = $request->boolean('auto_verify');
         $requestingUser = $request->user();
+
+        // If no user from middleware, try to manually verify token for admin auto-verify
+        if (!$requestingUser && $autoVerify) {
+            $requestingUser = $this->getUserFromToken($request);
+        }
+
         $isAdminCreating = $requestingUser && RolePolicy::isAdmin($requestingUser) && $autoVerify;
 
         if ($isAdminCreating) {
