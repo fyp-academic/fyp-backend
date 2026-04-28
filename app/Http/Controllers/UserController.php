@@ -167,7 +167,7 @@ class UserController extends Controller
 
     /**
      * GET /api/v1/instructors/{id}
-     * Get a specific instructor with full profile.
+     * Get a specific instructor with full profile (by user_id).
      * - Admin: Can view any instructor
      */
     public function showInstructor(Request $request, string $id): JsonResponse
@@ -180,7 +180,8 @@ class UserController extends Controller
         }
 
         $instructor = Instructor::with(['user', 'college', 'degreeProgrammes.courses', 'courses'])
-            ->findOrFail($id);
+            ->where('user_id', $id)
+            ->firstOrFail();
 
         return response()->json(['data' => $instructor]);
     }
@@ -200,17 +201,26 @@ class UserController extends Controller
 
         $targetUser = User::findOrFail($id);
 
+        // Convert empty strings to null for proper validation
+        $input = $request->all();
+        foreach ($input as $key => $value) {
+            if ($value === '') {
+                $input[$key] = null;
+            }
+        }
+        $request->replace($input);
+
         // Validate based on role
         if ($targetUser->role === 'student') {
             $validated = $request->validate([
                 'name' => 'sometimes|string|max:255',
                 'email' => 'sometimes|email|unique:users,email,' . $id,
-                'registration_number' => 'sometimes|string|max:30|unique:users,registration_number,' . $id,
-                'degree_programme_id' => 'sometimes|string|exists:degree_programmes,id',
+                'registration_number' => 'sometimes|nullable|string|max:30|unique:users,registration_number,' . $id,
+                'degree_programme_id' => 'sometimes|nullable|string|exists:degree_programmes,id',
                 'gender' => 'sometimes|nullable|string|in:male,female,other',
                 'phone_number' => 'sometimes|nullable|string|max:30',
-                'year_of_study' => 'sometimes|integer|min:1|max:7',
-                'education_level' => 'sometimes|string|in:certificate,diploma,bachelor,master,phd',
+                'year_of_study' => 'sometimes|nullable|integer|min:1|max:7',
+                'education_level' => 'sometimes|nullable|string|in:certificate,diploma,bachelor,master,phd',
                 'nationality' => 'sometimes|nullable|string|max:50',
             ]);
         } else {
@@ -231,7 +241,7 @@ class UserController extends Controller
 
     /**
      * PUT /api/v1/instructors/{id}
-     * Update an instructor profile.
+     * Update an instructor profile (by user_id).
      */
     public function updateInstructor(Request $request, string $id): JsonResponse
     {
@@ -242,8 +252,17 @@ class UserController extends Controller
             return response()->json(['message' => 'Forbidden. Only admins can update instructors.'], 403);
         }
 
-        $instructor = Instructor::findOrFail($id);
+        $instructor = Instructor::where('user_id', $id)->firstOrFail();
         $targetUser = $instructor->user;
+
+        // Convert empty strings to null for proper validation
+        $input = $request->all();
+        foreach ($input as $key => $value) {
+            if ($value === '') {
+                $input[$key] = null;
+            }
+        }
+        $request->replace($input);
 
         $validated = $request->validate([
             // User fields
@@ -252,11 +271,11 @@ class UserController extends Controller
             'gender' => 'sometimes|nullable|string|in:male,female,other',
             'phone_number' => 'sometimes|nullable|string|max:20',
             // Instructor fields
-            'staff_id' => 'sometimes|string|max:30|unique:instructors,staff_id,' . $id,
-            'college_id' => 'sometimes|string|exists:colleges,id',
+            'staff_id' => 'sometimes|nullable|string|max:30|unique:instructors,staff_id,' . $instructor->id,
+            'college_id' => 'sometimes|nullable|string|exists:colleges,id',
             'national_id' => 'sometimes|nullable|string|max:50',
-            'employment_type' => 'sometimes|string|in:full-time,part-time,visiting',
-            'academic_rank' => 'sometimes|string|in:assistant_lecturer,lecturer,senior_lecturer,associate_professor,professor,tutorial_assistant,graduate_assistant',
+            'employment_type' => 'sometimes|nullable|string|in:full-time,part-time,visiting',
+            'academic_rank' => 'sometimes|nullable|string|in:assistant_lecturer,lecturer,senior_lecturer,associate_professor,professor,tutorial_assistant,graduate_assistant',
             'date_of_employment' => 'sometimes|nullable|date',
             'highest_qualification' => 'sometimes|nullable|string|max:100',
             'field_of_specialization' => 'sometimes|nullable|string|max:100',
@@ -325,7 +344,7 @@ class UserController extends Controller
 
     /**
      * DELETE /api/v1/instructors/{id}
-     * Delete an instructor (user + profile).
+     * Delete an instructor (user + profile) by user_id.
      */
     public function destroyInstructor(Request $request, string $id): JsonResponse
     {
@@ -336,7 +355,7 @@ class UserController extends Controller
             return response()->json(['message' => 'Forbidden. Only admins can delete instructors.'], 403);
         }
 
-        $instructor = Instructor::findOrFail($id);
+        $instructor = Instructor::where('user_id', $id)->firstOrFail();
         $targetUser = $instructor->user;
 
         // Prevent self-deletion
