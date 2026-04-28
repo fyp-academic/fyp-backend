@@ -455,40 +455,6 @@ Route::middleware('auth:sanctum')->prefix('grade-items')->group(function () {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// COLLEGES (Admin only)
-// ─────────────────────────────────────────────────────────────────────
-Route::middleware('strict.admin')->prefix('colleges')->group(function () {
-    Route::post('/',   [CollegeController::class, 'store']);
-    Route::get('/{id}',    [CollegeController::class, 'show']);
-    Route::put('/{id}',    [CollegeController::class, 'update']);
-    Route::delete('/{id}', [CollegeController::class, 'destroy']);
-});
-
-// ─────────────────────────────────────────────────────────────────────
-// DEGREE PROGRAMMES (Admin or Instructor)
-// ─────────────────────────────────────────────────────────────────────
-Route::middleware('admin.or.instructor')->prefix('degree-programmes')->group(function () {
-    Route::post('/',   [DegreeProgrammeController::class, 'store']);
-    Route::get('/{id}',    [DegreeProgrammeController::class, 'show']);
-    Route::put('/{id}',    [DegreeProgrammeController::class, 'update']);
-    Route::delete('/{id}', [DegreeProgrammeController::class, 'destroy']);
-
-    // Admin capabilities
-    Route::post('/{id}/instructors', [DegreeProgrammeController::class, 'assignInstructors']);
-    Route::get('/{id}/students', [DegreeProgrammeController::class, 'students']);
-    Route::get('/{id}/courses', [DegreeProgrammeController::class, 'courses']);
-});
-
-// ─────────────────────────────────────────────────────────────────────
-// CATEGORIES (Admin or Instructor - create/update/delete only)
-// ─────────────────────────────────────────────────────────────────────
-Route::middleware('admin.or.instructor')->prefix('categories')->group(function () {
-    Route::post('/',   [CategoryController::class, 'store']);
-    Route::put('/{id}',    [CategoryController::class, 'update']);
-    Route::delete('/{id}', [CategoryController::class, 'destroy']);
-});
-
-// ─────────────────────────────────────────────────────────────────────
 // NOTIFICATIONS
 // ─────────────────────────────────────────────────────────────────────
 Route::middleware('auth:sanctum')->prefix('notifications')->group(function () {
