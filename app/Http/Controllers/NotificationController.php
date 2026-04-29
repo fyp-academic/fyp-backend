@@ -95,8 +95,28 @@ class NotificationController extends Controller
             ->whereIn('status', ['sent', 'delivered'])
             ->count();
 
+        // Transform notifications to match frontend expected fields
+        $transformedItems = collect($paginated->items())->map(function ($notification) {
+            return [
+                'id' => $notification->id,
+                'type' => $notification->type,
+                'channel' => $notification->channel,
+                'title' => $notification->title,
+                'body' => $notification->body,
+                'message' => $notification->body, // Alias for frontend compatibility
+                'payload' => $notification->payload,
+                'status' => $notification->status,
+                'read' => $notification->status === 'read',
+                'read_at' => $notification->read_at,
+                'sent_at' => $notification->sent_at,
+                'timestamp' => $notification->created_at->toISOString(),
+                'created_at' => $notification->created_at,
+                'updated_at' => $notification->updated_at,
+            ];
+        })->all();
+
         return response()->json([
-            'data' => $paginated->items(),
+            'data' => $transformedItems,
             'meta' => [
                 'current_page' => $paginated->currentPage(),
                 'last_page' => $paginated->lastPage(),
