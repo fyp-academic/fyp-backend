@@ -97,9 +97,11 @@ class Instructor extends Model
         return $this->belongsToMany(
             DegreeProgramme::class,
             'degree_programme_instructor',
-            'instructor_id',  // This is actually the user_id in the pivot table
-            'degree_programme_id'
-        )->wherePivot('instructor_id', $this->user_id);
+            'instructor_id',   // Foreign key on pivot table (refers to users.id)
+            'degree_programme_id',
+            'user_id',         // Local key on this model (Instructor.user_id)
+            'id'               // Local key on related model
+        );
     }
 
     /**
