@@ -90,10 +90,12 @@ class Instructor extends Model
 
     /**
      * Get the degree programmes assigned to this instructor.
+     * Accesses via the user relationship since pivot table uses user_id.
      */
     public function degreeProgrammes(): BelongsToMany
     {
-        return $this->belongsToMany(DegreeProgramme::class, 'instructor_degree_programme');
+        // Access through user->assignedDegreeProgrammes since the pivot stores user_ids
+        return $this->user->assignedDegreeProgrammes();
     }
 
     /**

@@ -300,32 +300,35 @@ class ProfileController extends Controller
             return response()->json(['message' => 'Forbidden. Student access only.'], 403);
         }
 
-        // Load the user's degree programme with instructors
-        $user->load(['degreeProgramme.instructors.courses', 'degreeProgramme.instructors.user']);
+        // Load the user's degree programme with instructors and their profiles
+        $user->load(['degreeProgramme.instructors.instructor.courses']);
 
         if (!$user->degreeProgramme) {
             return response()->json(['data' => [], 'message' => 'No degree programme assigned.']);
         }
 
-        $instructors = $user->degreeProgramme->instructors->map(function ($instructor) {
+        $instructors = $user->degreeProgramme->instructors->map(function ($instructorUser) {
+            // $instructorUser is a User model, we need their Instructor profile
+            $profile = $instructorUser->instructor;
+
             return [
-                'id' => $instructor->id,
-                'user_id' => $instructor->user_id,
-                'name' => $instructor->user->name ?? 'Unknown',
-                'email' => $instructor->user->email ?? null,
-                'profile_image_url' => $this->getInstructorProfileImageUrl($instructor),
-                'courses' => $instructor->courses->map(function ($course) {
+                'id' => $profile?->id ?? $instructorUser->id,
+                'user_id' => $instructorUser->id,
+                'name' => $instructorUser->name ?? 'Unknown',
+                'email' => $instructorUser->email ?? null,
+                'profile_image_url' => $this->getInstructorProfileImageUrl($profile),
+                'courses' => $profile?->courses->map(function ($course) {
                     return [
                         'id' => $course->id,
                         'title' => $course->title,
                         'code' => $course->code ?? null,
                     ];
-                }),
-                'phone_number' => $instructor->phone_number ?? $instructor->user->phone_number ?? null,
-                'office_hours' => $instructor->office_hours ?? null,
-                'office_location' => $instructor->office_location ?? null,
-                'academic_rank' => $instructor->academic_rank ?? null,
-                'bio' => $instructor->bio ?? null,
+                }) ?? [],
+                'phone_number' => $profile?->phone_number ?? $instructorUser->phone_number ?? null,
+                'office_hours' => $profile?->office_hours ?? null,
+                'office_location' => $profile?->office_location ?? null,
+                'academic_rank' => $profile?->academic_rank ?? null,
+                'bio' => $profile?->bio ?? $instructorUser->bio ?? null,
             ];
         });
 
@@ -337,6 +340,10 @@ class ProfileController extends Controller
      */
     private function getInstructorProfileImageUrl($instructor): ?string
     {
+        if (!$instructor) {
+            return null;
+        }
+
         if ($instructor->profile_photo) {
             return asset('storage/' . $instructor->profile_photo);
         }
