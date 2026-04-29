@@ -56,12 +56,6 @@ class RolePolicy
             // Get assignments from degree_programme_instructor table (used by assignInstructors endpoint)
             $assignedIds = $user->assignedDegreeProgrammes()->pluck('degree_programmes.id')->toArray();
 
-            // Also check instructor_degree_programme table if user has an instructor profile
-            if ($user->instructor) {
-                $instructorIds = $user->instructor->degreeProgrammes()->pluck('degree_programmes.id')->toArray();
-                $assignedIds = array_unique(array_merge($assignedIds, $instructorIds));
-            }
-
             return $assignedIds;
         }
 
