@@ -35,12 +35,19 @@ class ProfileController extends Controller
             $profileData['instructor_profile'] = $user->instructor;
             $profileData['assigned_degree_programmes'] = $user->instructor->degreeProgrammes;
             $profileData['college'] = $user->instructor->college;
+            $profileData['college_code'] = $user->instructor->college?->code;
         } elseif ($user->role === 'student') {
             $profileData['degree_programme'] = $user->degreeProgramme;
             if ($user->degreeProgramme) {
                 $profileData['college'] = $user->degreeProgramme->college;
+                $profileData['college_code'] = $user->degreeProgramme->college?->code;
+                $profileData['program_code'] = $user->degreeProgramme->code;
             }
         }
+
+        // Map fields to match frontend expectations
+        $profileData['registration_no'] = $user->registration_number;
+        $profileData['phone'] = $user->phone_number;
 
         return response()->json(['data' => $profileData]);
     }
@@ -278,5 +285,66 @@ class ProfileController extends Controller
         );
 
         return response()->json(['message' => 'Preference updated.', 'data' => $pref]);
+    }
+
+    /**
+     * GET /api/v1/profile/my-instructors
+     * Get all instructors assigned to the student's degree programme.
+     */
+    public function myInstructors(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only students can access this endpoint
+        if ($user->role !== 'student') {
+            return response()->json(['message' => 'Forbidden. Student access only.'], 403);
+        }
+
+        // Load the user's degree programme with instructors
+        $user->load(['degreeProgramme.instructors.courses', 'degreeProgramme.instructors.user']);
+
+        if (!$user->degreeProgramme) {
+            return response()->json(['data' => [], 'message' => 'No degree programme assigned.']);
+        }
+
+        $instructors = $user->degreeProgramme->instructors->map(function ($instructor) {
+            return [
+                'id' => $instructor->id,
+                'user_id' => $instructor->user_id,
+                'name' => $instructor->user->name ?? 'Unknown',
+                'email' => $instructor->user->email ?? null,
+                'profile_image_url' => $this->getInstructorProfileImageUrl($instructor),
+                'courses' => $instructor->courses->map(function ($course) {
+                    return [
+                        'id' => $course->id,
+                        'title' => $course->title,
+                        'code' => $course->code ?? null,
+                    ];
+                }),
+                'phone_number' => $instructor->phone_number ?? $instructor->user->phone_number ?? null,
+                'office_hours' => $instructor->office_hours ?? null,
+                'office_location' => $instructor->office_location ?? null,
+                'academic_rank' => $instructor->academic_rank ?? null,
+                'bio' => $instructor->bio ?? null,
+            ];
+        });
+
+        return response()->json(['data' => $instructors]);
+    }
+
+    /**
+     * Get the profile image URL for an instructor.
+     */
+    private function getInstructorProfileImageUrl($instructor): ?string
+    {
+        if ($instructor->profile_photo) {
+            return asset('storage/' . $instructor->profile_photo);
+        }
+
+        if ($instructor->user && $instructor->user->profile_image) {
+            return asset('storage/' . $instructor->user->profile_image);
+        }
+
+        return null;
     }
 }

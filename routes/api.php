@@ -309,10 +309,22 @@ Route::prefix('v1')->group(function () {
         // NOTIFICATIONS
         // ─────────────────────────────────────────────────────────────────────
         Route::prefix('notifications')->group(function () {
+            // List API
             Route::get('/',                     [NotificationController::class, 'index']);
-            Route::post('mark-all-read',        [NotificationController::class, 'markAllRead']);
-            Route::patch('/{id}/read',          [NotificationController::class, 'markRead']);
-            Route::delete('/{id}',              [NotificationController::class, 'destroy']);
+            Route::get('unread-count',          [NotificationController::class, 'unreadCount']);
+            Route::post('read-all',             [NotificationController::class, 'markAllRead']);
+            Route::patch('{id}/read',          [NotificationController::class, 'markRead']);
+            Route::delete('{id}',              [NotificationController::class, 'destroy']);
+
+            // Preferences API
+            Route::get('preferences',           [NotificationController::class, 'getPreferences']);
+            Route::patch('preferences',        [NotificationController::class, 'updatePreferences']);
+            Route::post('preferences/reset',  [NotificationController::class, 'resetPreferences']);
+            Route::get('preferences/{type}',    [NotificationController::class, 'getPreferenceByType']);
+            Route::patch('preferences/{type}', [NotificationController::class, 'updatePreferenceByType']);
+
+            // Global mute
+            Route::post('mute',                 [NotificationController::class, 'setGlobalMute']);
         });
 
         // ─────────────────────────────────────────────────────────────────────
@@ -463,16 +475,6 @@ Route::middleware('auth:sanctum')->prefix('grade-items')->group(function () {
 });
 
 // ─────────────────────────────────────────────────────────────────────
-// NOTIFICATIONS
-// ─────────────────────────────────────────────────────────────────────
-Route::middleware('auth:sanctum')->prefix('notifications')->group(function () {
-    Route::get('/',                     [NotificationController::class, 'index']);
-    Route::post('mark-all-read',        [NotificationController::class, 'markAllRead']);
-    Route::patch('/{id}/read',          [NotificationController::class, 'markRead']);
-    Route::delete('/{id}',              [NotificationController::class, 'destroy']);
-});
-
-// ─────────────────────────────────────────────────────────────────────
 // MESSAGING — conversations & messages (real-time via Reverb)
 // ─────────────────────────────────────────────────────────────────────
 Route::middleware('auth:sanctum')->prefix('conversations')->group(function () {
@@ -569,6 +571,7 @@ Route::middleware('auth:sanctum')->prefix('profile')->group(function () {
     Route::post('instructor/image', [ProfileController::class, 'uploadInstructorImage']);
     Route::get('preferences',  [ProfileController::class, 'preferences']);
     Route::put('preferences',  [ProfileController::class, 'updatePreferences']);
+    Route::get('my-instructors', [ProfileController::class, 'myInstructors']);
 });
 
 }); // Close Route::prefix('v1')

@@ -136,6 +136,21 @@ class User extends Authenticatable
         return $this->hasMany(Notification::class);
     }
 
+    public function notificationPreferences(): HasMany
+    {
+        return $this->hasMany(NotificationPreference::class);
+    }
+
+    public function notificationDigests(): HasMany
+    {
+        return $this->hasMany(NotificationDigest::class);
+    }
+
+    public function devices(): HasMany
+    {
+        return $this->hasMany(UserDevice::class);
+    }
+
     public function conversations(): HasMany
     {
         return $this->hasMany(Conversation::class, 'owner_user_id');
