@@ -36,6 +36,7 @@ class ProfileController extends Controller
             $profileData['assigned_degree_programmes'] = $user->instructor->degreeProgrammes;
             $profileData['college'] = $user->instructor->college;
             $profileData['college_code'] = $user->instructor->college?->code;
+            $profileData['total_students'] = $user->instructor->totalStudents();
         } elseif ($user->role === 'student') {
             $profileData['degree_programme'] = $user->degreeProgramme;
             if ($user->degreeProgramme) {

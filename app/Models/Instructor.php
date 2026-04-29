@@ -160,4 +160,20 @@ class Instructor extends Model
             ->pluck('id')
             ->toArray();
     }
+
+    /**
+     * Get total count of students in assigned programmes.
+     */
+    public function totalStudents(): int
+    {
+        $programmeIds = $this->degreeProgrammes()->pluck('degree_programmes.id')->toArray();
+
+        if (empty($programmeIds)) {
+            return 0;
+        }
+
+        return User::where('role', 'student')
+            ->whereIn('degree_programme_id', $programmeIds)
+            ->count();
+    }
 }
