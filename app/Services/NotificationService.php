@@ -16,14 +16,14 @@ class NotificationService
      * Never sends synchronously - always queues.
      *
      * @param string $type Notification type constant
-     * @param int $userId Target user ID
+     * @param string $userId Target user ID
      * @param array $payload Notification data (title, body, action_url, etc.)
      * @param string|null $contextId Unique context ID for deduplication (e.g., assignment_id)
      * @return Notification|null The created notification or null if duplicate
      */
     public function dispatch(
         string $type,
-        int $userId,
+        string $userId,
         array $payload,
         ?string $contextId = null
     ): ?Notification {
@@ -102,7 +102,7 @@ class NotificationService
     /**
      * Generate a deterministic deduplication key
      */
-    private function generateDedupKey(string $type, int $userId, ?string $contextId): string
+    private function generateDedupKey(string $type, string $userId, ?string $contextId): string
     {
         if ($contextId) {
             return "{$type}__{$userId}__{$contextId}";
@@ -127,7 +127,7 @@ class NotificationService
      *
      * @return NotificationPreference[]
      */
-    private function getUserPreferences(int $userId, string $type): array
+    private function getUserPreferences(string $userId, string $type): array
     {
         $prefs = NotificationPreference::where('user_id', $userId)
             ->where('notification_type', $type)
@@ -146,7 +146,7 @@ class NotificationService
      *
      * @return NotificationPreference[]
      */
-    private function createDefaultPreferences(int $userId, string $type): array
+    private function createDefaultPreferences(string $userId, string $type): array
     {
         $defaultChannels = NotificationTypes::getDefaultChannels($type);
         $prefs = [];
@@ -205,7 +205,7 @@ class NotificationService
     /**
      * Seed default preferences for a new user
      */
-    public function seedDefaultPreferences(int $userId): void
+    public function seedDefaultPreferences(string $userId): void
     {
         $types = NotificationTypes::all();
 
@@ -232,7 +232,7 @@ class NotificationService
     /**
      * Toggle global mute for a user
      */
-    public function setGlobalMute(int $userId, bool $muted): void
+    public function setGlobalMute(string $userId, bool $muted): void
     {
         // Store mute status in cache or user settings
         cache()->put("user:{$userId}:notifications:muted", $muted, now()->addDays(30));
@@ -246,7 +246,7 @@ class NotificationService
     /**
      * Check if user has global mute enabled
      */
-    public function isGloballyMuted(int $userId): bool
+    public function isGloballyMuted(string $userId): bool
     {
         return cache()->get("user:{$userId}:notifications:muted", false);
     }
