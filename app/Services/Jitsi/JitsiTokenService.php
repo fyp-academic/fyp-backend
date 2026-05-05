@@ -38,6 +38,7 @@ class JitsiTokenService
                 'email' => $user['email'] ?? '',
                 'avatar' => $user['avatar'] ?? '',
                 'moderator' => $isModerator,
+                'affiliation' => $isModerator ? 'owner' : 'member',
             ],
             'room' => [
                 'regex' => false,
