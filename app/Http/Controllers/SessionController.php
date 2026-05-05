@@ -124,7 +124,7 @@ class SessionController extends Controller
                         });
                     });
                 })
-                ->with(['course', 'participants']);
+                ->with(['course', 'instructor', 'participants']);
         } else {
             // Students see sessions for courses they're enrolled in
             $enrolledCourseIds = $user->enrollments()
@@ -132,7 +132,7 @@ class SessionController extends Controller
                 ->pluck('course_id');
 
             $query->whereIn('course_id', $enrolledCourseIds)
-                ->with('course');
+                ->with(['course', 'instructor']);
         }
 
         // Filter by status
