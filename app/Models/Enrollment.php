@@ -11,7 +11,7 @@ class Enrollment extends Model
     protected $keyType   = 'string';
 
     protected $fillable = [
-        'id', 'user_id', 'course_id', 'role', 'enrolled_date',
+        'id', 'user_id', 'course_id', 'role', 'status', 'enrolled_date',
         'last_access', 'progress', 'groups',
     ];
 

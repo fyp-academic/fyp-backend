@@ -73,6 +73,44 @@ class SessionController extends Controller
             $session = $this->sessionService->createSession($user->id, $request->all());
             $session->load('course', 'instructor');
 
+            // Send notifications to enrolled students
+            dispatch(function () use ($session) {
+                try {
+                    $enrolledStudents = $session->course->enrollments()
+                        ->where('status', 'active')
+                        ->get();
+
+                    foreach ($enrolledStudents as $enrollment) {
+                        // Create in-app notification
+                        $enrollment->user->notifications()->create([
+                            'type' => 'live_session',
+                            'title' => 'New Live Session Scheduled',
+                            'body' => "'{$session->title}' has been scheduled for {$session->scheduled_at->format('M d, Y at g:i A')}",
+                            'payload' => [
+                                'session_id' => $session->id,
+                                'course_id' => $session->course_id,
+                                'scheduled_at' => $session->scheduled_at->toIso8601String(),
+                            ],
+                        ]);
+
+                        // Send email notification
+                        \Illuminate\Support\Facades\Mail::send(
+                            new \App\Mail\CourseUpdateMail(
+                                $enrollment->user,
+                                $session->course->name ?? $session->course->title,
+                                'live_session',
+                                $session->title,
+                                "Join the live session on {$session->scheduled_at->format('M d, Y at g:i A')}",
+                                $session->scheduled_at->toDateString(),
+                                route('student.sessions.show', $session->id)
+                            )
+                        );
+                    }
+                } catch (\Exception $e) {
+                    Log::error("Failed to send live session notifications: " . $e->getMessage());
+                }
+            })->afterResponse();
+
             return response()->json([
                 'id' => $session->id,
                 'title' => $session->title,
