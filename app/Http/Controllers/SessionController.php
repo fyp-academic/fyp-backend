@@ -126,18 +126,28 @@ class SessionController extends Controller
                 })
                 ->with(['course', 'instructor', 'participants']);
         } else {
-            // Students see sessions for courses they're enrolled in
-            $enrolledCourseIds = $user->enrollments()
-                ->where('status', 'active')
-                ->pluck('course_id');
+            // Students see sessions for courses in their degree programme
+            if ($user->degree_programme_id) {
+                $programmeCourseIds = \App\Models\Course::whereHas('degreeProgrammes', function ($q) use ($user) {
+                    $q->where('degree_programmes.id', $user->degree_programme_id);
+                })->pluck('id');
 
-            $query->whereIn('course_id', $enrolledCourseIds)
-                ->with(['course', 'instructor']);
+                $query->whereIn('course_id', $programmeCourseIds);
+            } else {
+                // Fallback to enrolled courses if no programme assigned
+                $enrolledCourseIds = $user->enrollments()
+                    ->where('status', 'active')
+                    ->pluck('course_id');
+                $query->whereIn('course_id', $enrolledCourseIds);
+            }
+
+            $query->with(['course', 'instructor']);
         }
 
-        // Filter by status
+        // Filter by status (supports comma-separated values)
         if ($request->has('status')) {
-            $query->where('status', $request->status);
+            $statuses = explode(',', $request->status);
+            $query->whereIn('status', $statuses);
         }
 
         // Filter by course
