@@ -231,4 +231,36 @@ class DegreeProgrammeController extends Controller
 
         return response()->json(['data' => $courses]);
     }
+
+    /**
+     * POST /api/v1/degree-programmes/{id}/courses
+     * Assign courses to a degree programme (Admin only).
+     */
+    public function assignCourses(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Admin access required.'], 403);
+        }
+
+        $programme = DegreeProgramme::findOrFail($id);
+
+        $validator = Validator::make($request->all(), [
+            'course_ids' => 'required|array',
+            'course_ids.*' => 'string|exists:courses,id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        // Sync courses to this degree programme
+        $programme->courses()->syncWithoutDetaching($request->course_ids);
+
+        return response()->json([
+            'message' => 'Courses assigned to degree programme successfully.',
+            'data' => $programme->courses()->with('instructor')->get(),
+        ]);
+    }
 }

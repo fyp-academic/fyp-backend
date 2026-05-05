@@ -293,6 +293,7 @@ Route::prefix('v1')->group(function () {
             Route::post('/{id}/instructors', [DegreeProgrammeController::class, 'assignInstructors']);
             Route::get('/{id}/students', [DegreeProgrammeController::class, 'students']);
             Route::get('/{id}/courses', [DegreeProgrammeController::class, 'courses']);
+            Route::post('/{id}/courses', [DegreeProgrammeController::class, 'assignCourses']);
         });
 
         // ─────────────────────────────────────────────────────────────────────
