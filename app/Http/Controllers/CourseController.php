@@ -561,4 +561,119 @@ class CourseController extends Controller
             'user_id'   => $user->id,
         ]);
     }
+
+    /**
+     * PUT /api/v1/courses/{id}/instructor
+     * Assign or change the instructor for a course (Admin only).
+     */
+    public function assignInstructor(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only admin can assign instructors
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Admin access required.'], 403);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'instructor_id' => 'required|string|exists:users,id',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $course = Course::findOrFail($id);
+
+        // Verify the user is an instructor
+        $instructor = User::findOrFail($request->instructor_id);
+        if ($instructor->role !== 'instructor') {
+            return response()->json(['message' => 'The assigned user must be an instructor.'], 422);
+        }
+
+        // Update course instructor
+        $course->update([
+            'instructor_id' => $instructor->id,
+            'instructor_name' => $instructor->name,
+        ]);
+
+        $course->load(['category', 'instructor', 'sections.activities', 'degreeProgrammes']);
+
+        return response()->json([
+            'message' => 'Instructor assigned successfully.',
+            'data' => $course,
+        ]);
+    }
+
+    /**
+     * DELETE /api/v1/courses/{id}/instructor
+     * Remove the instructor from a course (Admin only).
+     * Sets the course instructor to null (unassigned).
+     */
+    public function removeInstructor(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only admin can remove instructors
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Admin access required.'], 403);
+        }
+
+        $course = Course::findOrFail($id);
+
+        // Remove instructor
+        $course->update([
+            'instructor_id' => null,
+            'instructor_name' => null,
+        ]);
+
+        return response()->json([
+            'message' => 'Instructor removed from course.',
+            'course_id' => $id,
+        ]);
+    }
+
+    /**
+     * GET /api/v1/courses/{id}/eligible-instructors
+     * Get instructors eligible to be assigned to this course
+     * (instructors assigned to the course's degree programmes).
+     */
+    public function eligibleInstructors(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+
+        // Only admin can view eligible instructors
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Admin access required.'], 403);
+        }
+
+        $course = Course::with('degreeProgrammes.instructors')->findOrFail($id);
+
+        // Get instructors from the course's degree programmes
+        $eligibleIds = [];
+        foreach ($course->degreeProgrammes as $programme) {
+            foreach ($programme->instructors as $instructor) {
+                $eligibleIds[] = $instructor->id;
+            }
+        }
+        $eligibleIds = array_unique($eligibleIds);
+
+        $instructors = User::whereIn('id', $eligibleIds)
+            ->where('role', 'instructor')
+            ->with('instructor')
+            ->get()
+            ->map(function ($instructor) {
+                return [
+                    'id' => $instructor->id,
+                    'name' => $instructor->name,
+                    'email' => $instructor->email,
+                    'academic_rank' => $instructor->instructor?->academic_rank ?? null,
+                ];
+            });
+
+        return response()->json([
+            'data' => $instructors,
+            'current_instructor_id' => $course->instructor_id,
+        ]);
+    }
 }

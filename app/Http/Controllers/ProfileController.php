@@ -313,24 +313,30 @@ class ProfileController extends Controller
             return response()->json(['data' => [], 'message' => 'No degree programme found.']);
         }
 
-        $instructors = $user->degreeProgramme->instructors->map(function ($instructorUser) {
-            // Load instructor profile and courses if exists
+        $degreeProgrammeId = $user->degree_programme_id;
+
+        $instructors = $user->degreeProgramme->instructors->map(function ($instructorUser) use ($degreeProgrammeId) {
+            // Load instructor profile if exists
             $profile = $instructorUser->instructor;
 
-            // Load courses for this instructor
-            $courses = [];
-            if ($profile) {
-                $profile->load(['courses' => function ($query) {
-                    $query->select('id', 'title', 'code', 'instructor_id');
-                }]);
-                $courses = $profile->courses->map(function ($course) {
+            // Get courses created by this instructor that belong to the student's degree programme
+            $courses = \App\Models\Course::where('instructor_id', $instructorUser->id)
+                ->whereHas('degreeProgrammes', function ($query) use ($degreeProgrammeId) {
+                    $query->where('degree_programmes.id', $degreeProgrammeId);
+                })
+                ->select('id', 'name as title', 'short_name as code', 'status', 'visibility')
+                ->where('status', 'active')
+                ->get()
+                ->map(function ($course) {
                     return [
                         'id' => $course->id,
                         'title' => $course->title,
                         'code' => $course->code ?? null,
+                        'status' => $course->status,
+                        'visibility' => $course->visibility,
                     ];
-                })->toArray();
-            }
+                })
+                ->toArray();
 
             return [
                 'id' => $profile?->id ?? $instructorUser->id,

@@ -142,6 +142,11 @@ Route::prefix('v1')->group(function () {
             Route::post('/{id}/enroll',              [CourseController::class, 'enroll']);
             Route::delete('/{id}/enroll/{userId}',   [CourseController::class, 'unenroll']);
 
+            // Instructor Management (admin only)
+            Route::get('/{id}/eligible-instructors', [CourseController::class, 'eligibleInstructors']);
+            Route::put('/{id}/instructor',           [CourseController::class, 'assignInstructor']);
+            Route::delete('/{id}/instructor',        [CourseController::class, 'removeInstructor']);
+
             // Sections (nested under course)
             Route::get('/{id}/sections',                          [SectionController::class, 'index']);
             Route::post('/{id}/sections',                         [SectionController::class, 'store']);
