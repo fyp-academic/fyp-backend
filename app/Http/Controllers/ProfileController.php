@@ -301,16 +301,36 @@ class ProfileController extends Controller
             return response()->json(['message' => 'Forbidden. Student access only.'], 403);
         }
 
-        // Load the user's degree programme with instructors and their profiles
-        $user->load(['degreeProgramme.instructors.instructor.courses']);
-
-        if (!$user->degreeProgramme) {
+        // Check if student has a degree programme
+        if (!$user->degree_programme_id) {
             return response()->json(['data' => [], 'message' => 'No degree programme assigned.']);
         }
 
+        // Load the user's degree programme with instructors
+        $user->load(['degreeProgramme.instructors']);
+
+        if (!$user->degreeProgramme) {
+            return response()->json(['data' => [], 'message' => 'No degree programme found.']);
+        }
+
         $instructors = $user->degreeProgramme->instructors->map(function ($instructorUser) {
-            // $instructorUser is a User model, we need their Instructor profile
+            // Load instructor profile and courses if exists
             $profile = $instructorUser->instructor;
+
+            // Load courses for this instructor
+            $courses = [];
+            if ($profile) {
+                $profile->load(['courses' => function ($query) {
+                    $query->select('id', 'title', 'code', 'instructor_id');
+                }]);
+                $courses = $profile->courses->map(function ($course) {
+                    return [
+                        'id' => $course->id,
+                        'title' => $course->title,
+                        'code' => $course->code ?? null,
+                    ];
+                })->toArray();
+            }
 
             return [
                 'id' => $profile?->id ?? $instructorUser->id,
@@ -318,20 +338,17 @@ class ProfileController extends Controller
                 'name' => $instructorUser->name ?? 'Unknown',
                 'email' => $instructorUser->email ?? null,
                 'profile_image_url' => $this->getInstructorProfileImageUrl($profile),
-                'courses' => $profile?->courses->map(function ($course) {
-                    return [
-                        'id' => $course->id,
-                        'title' => $course->title,
-                        'code' => $course->code ?? null,
-                    ];
-                }) ?? [],
+                'courses' => $courses,
                 'phone_number' => $profile?->phone_number ?? $instructorUser->phone_number ?? null,
                 'office_hours' => $profile?->office_hours ?? null,
                 'office_location' => $profile?->office_location ?? null,
                 'academic_rank' => $profile?->academic_rank ?? null,
                 'bio' => $profile?->bio ?? $instructorUser->bio ?? null,
             ];
-        });
+        })->filter(function ($instructor) {
+            // Only return instructors with valid data
+            return !empty($instructor['name']) && $instructor['name'] !== 'Unknown';
+        })->values();
 
         return response()->json(['data' => $instructors]);
     }
