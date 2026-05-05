@@ -513,6 +513,7 @@ Route::middleware('auth:sanctum')->prefix('interventions')->group(function () {
 // ─────────────────────────────────────────────────────────────────────
 
 // Assignment submissions
+Route::middleware('auth:sanctum')->get('my-submissions',         [AssignmentController::class, 'mySubmissions']);
 Route::middleware('auth:sanctum')->get('submissions/{id}',       [AssignmentController::class, 'show']);
 Route::middleware('auth:sanctum')->put('submissions/{id}/grade', [AssignmentController::class, 'grade']);
 

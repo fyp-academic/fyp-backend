@@ -105,4 +105,46 @@ class AssignmentController extends Controller
 
         return response()->json(['message' => 'Submission graded.', 'data' => $submission]);
     }
+
+    /**
+     * GET /api/v1/my-submissions
+     * Get all submissions for the current student.
+     */
+    public function mySubmissions(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        $query = AssignmentSubmission::where('student_id', $user->id)
+            ->with(['activity', 'course'])
+            ->orderBy('submitted_at', 'desc');
+
+        if ($request->filled('status')) {
+            $query->where('status', $request->status);
+        }
+
+        if ($request->filled('course_id')) {
+            $query->where('course_id', $request->course_id);
+        }
+
+        $submissions = $query->get()->map(function ($submission) {
+            return [
+                'id' => $submission->id,
+                'activity_id' => $submission->activity_id,
+                'activity_title' => $submission->activity?->title ?? 'Unknown',
+                'course_id' => $submission->course_id,
+                'course_name' => $submission->course?->name ?? 'Unknown',
+                'status' => $submission->status,
+                'submission_text' => $submission->submission_text,
+                'file_name' => $submission->file_name,
+                'attempt_number' => $submission->attempt_number,
+                'submitted_at' => $submission->submitted_at,
+                'grade' => $submission->grade,
+                'feedback' => $submission->feedback,
+                'graded_at' => $submission->graded_at,
+                'late' => $submission->late,
+            ];
+        });
+
+        return response()->json(['data' => $submissions]);
+    }
 }
