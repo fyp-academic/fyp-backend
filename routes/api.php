@@ -20,7 +20,6 @@ use App\Http\Controllers\AttendanceController;
 use App\Http\Controllers\BookController;
 use App\Http\Controllers\ChecklistController;
 use App\Http\Controllers\ChoiceController;
-use App\Http\Controllers\CertificateController;
 use App\Http\Controllers\DatabaseActivityController;
 use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\FolderController;
@@ -31,6 +30,7 @@ use App\Http\Controllers\ScormController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\CollegeController;
 use App\Http\Controllers\DegreeProgrammeController;
+use App\Http\Controllers\SessionController;
 
 Route::prefix('v1')->group(function () {
 
@@ -222,12 +222,6 @@ Route::prefix('v1')->group(function () {
             Route::post('/{id}/choice-options',   [ChoiceController::class, 'storeOption']);
             Route::post('/{id}/choice-responses', [ChoiceController::class, 'respond']);
             Route::get('/{id}/choice-results',    [ChoiceController::class, 'results']);
-
-            // Certificate
-            Route::get('/{id}/certificate',          [CertificateController::class, 'show']);
-            Route::post('/{id}/certificate',         [CertificateController::class, 'upsert']);
-            Route::get('/{id}/certificate/issues',   [CertificateController::class, 'issues']);
-            Route::post('/{id}/certificate/issue',   [CertificateController::class, 'issue']);
 
             // Database activity (fields & entries)
             Route::get('/{id}/db-fields',   [DatabaseActivityController::class, 'fields']);
@@ -560,6 +554,49 @@ Route::middleware('auth:sanctum')->delete('glossary-entries/{id}',         [Glos
 Route::middleware('auth:sanctum')->put('lesson-pages/{id}',    [LessonController::class, 'update']);
 Route::middleware('auth:sanctum')->delete('lesson-pages/{id}', [LessonController::class, 'destroy']);
 
+// ─────────────────────────────────────────────────────────────────────
+// JITSI VIDEO SESSIONS (Video Conferencing)
+// ─────────────────────────────────────────────────────────────────────
+Route::middleware('auth:sanctum')->prefix('sessions')->group(function () {
+    // Session CRUD
+    Route::get('/', [SessionController::class, 'index']);
+    Route::post('/', [SessionController::class, 'store']);
+    Route::get('/{id}', [SessionController::class, 'show']);
+
+    // Session lifecycle
+    Route::patch('/{id}/start', [SessionController::class, 'start']);
+    Route::patch('/{id}/end', [SessionController::class, 'end']);
+
+    // Token generation
+    Route::post('/{id}/token', [SessionController::class, 'getToken']);
+
+    // Recording
+    Route::post('/{id}/recording/start', [SessionController::class, 'startRecording']);
+    Route::post('/{id}/recording/stop', [SessionController::class, 'stopRecording']);
+
+    // Participants
+    Route::get('/{id}/participants', [SessionController::class, 'getParticipants']);
+    Route::post('/{id}/kick/{userId}', [SessionController::class, 'kickParticipant']);
+    Route::post('/{id}/mute-all', [SessionController::class, 'muteAll']);
+
+    // AI features
+    Route::get('/{id}/transcript', [SessionController::class, 'getTranscript']);
+    Route::get('/{id}/summary', [SessionController::class, 'getSummary']);
+    Route::post('/{id}/ask-ai', [SessionController::class, 'askAI']);
+
+    // Participant lifecycle tracking
+    Route::post('/{id}/participant-left', [SessionController::class, 'participantLeft']);
+    Route::post('/{id}/update-metrics', [SessionController::class, 'updateMetrics']);
+});
+
+// Recording download URL
+Route::middleware('auth:sanctum')->get('recordings/{id}/url', [SessionController::class, 'getRecordingUrl']);
+
+// Transcription endpoint (audio upload)
+Route::middleware('auth:sanctum')->post('transcribe', [SessionController::class, 'transcribe']);
+
+}); // Close Route::prefix('v1')
+
 // ────────────────────────────────────────────────────────────────────
 // PROFILE & PREFERENCES
 // ─────────────────────────────────────────────────────────────────────
@@ -574,4 +611,23 @@ Route::middleware('auth:sanctum')->prefix('profile')->group(function () {
     Route::get('my-instructors', [ProfileController::class, 'myInstructors']);
 });
 
-}); // Close Route::prefix('v1')
+// ─────────────────────────────────────────────────────────────────────
+// JITSI WEBHOOKS (Public endpoints for Jibri/Jitsi callbacks)
+// ─────────────────────────────────────────────────────────────────────
+Route::post('webhooks/jibri', [SessionController::class, 'handleJibriWebhook']);
+
+// ─────────────────────────────────────────────────────────────────────
+// POLLS (In-session polling)
+// ─────────────────────────────────────────────────────────────────────
+Route::middleware('auth:sanctum')->prefix('sessions/{id}')->group(function () {
+    Route::get('polls', [SessionController::class, 'getSessionPolls']);
+    Route::post('polls', [SessionController::class, 'createPoll']);
+    Route::post('transcription-consent', [SessionController::class, 'grantTranscriptionConsent']);
+    Route::post('generate-quiz', [SessionController::class, 'generateQuiz']);
+});
+
+Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
+    Route::post('{pollId}/vote', [SessionController::class, 'voteOnPoll']);
+    Route::get('{pollId}/results', [SessionController::class, 'getPollResults']);
+    Route::post('{pollId}/end', [SessionController::class, 'endPoll']);
+});

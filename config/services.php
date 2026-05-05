@@ -48,4 +48,33 @@ return [
         ],
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Jitsi Meet Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configuration for Jitsi video conferencing integration.
+    |
+    */
+    'jitsi' => [
+        'domain' => env('JITSI_DOMAIN', 'meet.yourlms.com'),
+        'app_id' => env('JITSI_APP_ID', 'lms-production'),
+        'app_secret' => env('JITSI_APP_SECRET', ''),
+        'jibri_url' => env('JIBRI_URL', 'http://localhost:2222'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | OpenAI Configuration
+    |--------------------------------------------------------------------------
+    |
+    | Configuration for OpenAI API integration (transcription & summarization).
+    |
+    */
+    'openai' => [
+        'api_key' => env('OPENAI_API_KEY', ''),
+        'model' => env('OPENAI_MODEL', 'whisper-1'),
+        'summary_model' => env('OPENAI_SUMMARY_MODEL', 'gpt-4o'),
+    ],
+
 ];
