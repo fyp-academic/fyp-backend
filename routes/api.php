@@ -594,13 +594,21 @@ Route::middleware('auth:sanctum')->prefix('sessions')->group(function () {
     // Participant lifecycle tracking
     Route::post('/{id}/participant-left', [SessionController::class, 'participantLeft']);
     Route::post('/{id}/update-metrics', [SessionController::class, 'updateMetrics']);
+
+    // Polls (In-session polling)
+    Route::get('/{id}/polls', [SessionController::class, 'getSessionPolls']);
+    Route::post('/{id}/polls', [SessionController::class, 'createPoll']);
+
+    // Transcription consent & Quiz generation
+    Route::post('/{id}/transcription-consent', [SessionController::class, 'grantTranscriptionConsent']);
+    Route::post('/{id}/generate-quiz', [SessionController::class, 'generateQuiz']);
+
+    // Recording download URL
+    Route::get('recordings/{id}/url', [SessionController::class, 'getRecordingUrl']);
+
+    // Transcription endpoint (audio upload)
+    Route::post('transcribe', [SessionController::class, 'transcribe']);
 });
-
-// Recording download URL
-Route::middleware('auth:sanctum')->get('recordings/{id}/url', [SessionController::class, 'getRecordingUrl']);
-
-// Transcription endpoint (audio upload)
-Route::middleware('auth:sanctum')->post('transcribe', [SessionController::class, 'transcribe']);
 
 // ────────────────────────────────────────────────────────────────────
 // PROFILE & PREFERENCES
@@ -616,25 +624,17 @@ Route::middleware('auth:sanctum')->prefix('profile')->group(function () {
     Route::get('my-instructors', [ProfileController::class, 'myInstructors']);
 });
 
-}); // Close Route::prefix('v1')
-
 // ─────────────────────────────────────────────────────────────────────
-// JITSI WEBHOOKS (Public endpoints for Jibri/Jitsi callbacks)
+// POLLS - Voting & Results
 // ─────────────────────────────────────────────────────────────────────
-Route::post('webhooks/jibri', [SessionController::class, 'handleJibriWebhook']);
-
-// ─────────────────────────────────────────────────────────────────────
-// POLLS (In-session polling)
-// ─────────────────────────────────────────────────────────────────────
-Route::middleware('auth:sanctum')->prefix('sessions/{id}')->group(function () {
-    Route::get('polls', [SessionController::class, 'getSessionPolls']);
-    Route::post('polls', [SessionController::class, 'createPoll']);
-    Route::post('transcription-consent', [SessionController::class, 'grantTranscriptionConsent']);
-    Route::post('generate-quiz', [SessionController::class, 'generateQuiz']);
-});
-
 Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
     Route::post('{pollId}/vote', [SessionController::class, 'voteOnPoll']);
     Route::get('{pollId}/results', [SessionController::class, 'getPollResults']);
     Route::post('{pollId}/end', [SessionController::class, 'endPoll']);
 });
+
+}); // Close Route::prefix('v1')
+
+// JITSI WEBHOOKS (Public endpoints for Jibri/Jitsi callbacks)
+// ─────────────────────────────────────────────────────────────────────
+Route::post('webhooks/jibri', [SessionController::class, 'handleJibriWebhook']);
