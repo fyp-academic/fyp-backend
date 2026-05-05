@@ -71,14 +71,27 @@ class SessionController extends Controller
 
         try {
             $session = $this->sessionService->createSession($user->id, $request->all());
+            $session->load('course', 'instructor');
 
             return response()->json([
                 'id' => $session->id,
                 'title' => $session->title,
                 'course_id' => $session->course_id,
+                'course' => [
+                    'id' => $session->course->id,
+                    'name' => $session->course->name,
+                    'title' => $session->course->name,
+                ],
+                'instructor' => [
+                    'id' => $session->instructor->id,
+                    'name' => $session->instructor->name,
+                ],
                 'room_id' => $session->room_id,
                 'status' => $session->status,
                 'scheduled_at' => $session->scheduled_at,
+                'duration' => $session->duration,
+                'max_participants' => $session->max_participants,
+                'recording_enabled' => $session->recording_enabled,
                 'jitsi_domain' => $this->tokenService->getDomain(),
                 'created_at' => $session->created_at,
             ], 201);
