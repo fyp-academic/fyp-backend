@@ -595,8 +595,6 @@ Route::middleware('auth:sanctum')->get('recordings/{id}/url', [SessionController
 // Transcription endpoint (audio upload)
 Route::middleware('auth:sanctum')->post('transcribe', [SessionController::class, 'transcribe']);
 
-}); // Close Route::prefix('v1')
-
 // ────────────────────────────────────────────────────────────────────
 // PROFILE & PREFERENCES
 // ─────────────────────────────────────────────────────────────────────
@@ -610,6 +608,8 @@ Route::middleware('auth:sanctum')->prefix('profile')->group(function () {
     Route::put('preferences',  [ProfileController::class, 'updatePreferences']);
     Route::get('my-instructors', [ProfileController::class, 'myInstructors']);
 });
+
+}); // Close Route::prefix('v1')
 
 // ─────────────────────────────────────────────────────────────────────
 // JITSI WEBHOOKS (Public endpoints for Jibri/Jitsi callbacks)
