@@ -17,6 +17,7 @@ class NotificationTypes
     public const DIRECT_MESSAGE = 'direct_message';
     public const ENROLLMENT_CONFIRMED = 'enrollment_confirmed';
     public const DISCUSSION_REPLY = 'discussion_reply';
+    public const LIVE_SESSION = 'live_session';
 
     // Student notifications - Medium
     public const PEER_REVIEW_ASSIGNED = 'peer_review_assigned';
@@ -74,6 +75,7 @@ class NotificationTypes
                     self::DIRECT_MESSAGE,
                     self::ENROLLMENT_CONFIRMED,
                     self::DISCUSSION_REPLY,
+                    self::LIVE_SESSION,
                 ],
                 'medium' => [
                     self::PEER_REVIEW_ASSIGNED,
@@ -153,6 +155,7 @@ class NotificationTypes
             self::DIRECT_MESSAGE => ['in_app', 'email'],
             self::ENROLLMENT_CONFIRMED => ['email'],
             self::DISCUSSION_REPLY => ['in_app'],
+            self::LIVE_SESSION => ['email', 'in_app'],
 
             // Student - Medium
             self::PEER_REVIEW_ASSIGNED => ['email', 'in_app'],

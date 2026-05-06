@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Constants\NotificationTypes;
 use App\Models\Session;
 use App\Models\SessionRecording;
 use App\Models\User;
@@ -10,6 +11,7 @@ use App\Services\Jitsi\JitsiTokenService;
 use App\Services\Jitsi\RecordingService;
 use App\Services\Jitsi\SessionService;
 use App\Services\Jitsi\RateLimiterService;
+use App\Services\NotificationService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -22,19 +24,22 @@ class SessionController extends Controller
     private AIService $aiService;
     private JitsiTokenService $tokenService;
     private RateLimiterService $rateLimiterService;
+    private NotificationService $notificationService;
 
     public function __construct(
         SessionService $sessionService,
         RecordingService $recordingService,
         AIService $aiService,
         JitsiTokenService $tokenService,
-        RateLimiterService $rateLimiterService
+        RateLimiterService $rateLimiterService,
+        NotificationService $notificationService
     ) {
         $this->sessionService = $sessionService;
         $this->recordingService = $recordingService;
         $this->aiService = $aiService;
         $this->tokenService = $tokenService;
         $this->rateLimiterService = $rateLimiterService;
+        $this->notificationService = $notificationService;
     }
 
     /**
@@ -73,43 +78,27 @@ class SessionController extends Controller
             $session = $this->sessionService->createSession($user->id, $request->all());
             $session->load('course', 'instructor');
 
-            // Send notifications to enrolled students
-            dispatch(function () use ($session) {
-                try {
-                    $enrolledStudents = $session->course->enrollments()
-                        ->where('status', 'active')
-                        ->get();
+            // Send notifications to enrolled students respecting preferences
+            $enrolledStudents = $session->course->enrollments()
+                ->where('status', 'active')
+                ->with('user')
+                ->get();
 
-                    foreach ($enrolledStudents as $enrollment) {
-                        // Create in-app notification
-                        $enrollment->user->notifications()->create([
-                            'type' => 'live_session',
-                            'title' => 'New Live Session Scheduled',
-                            'body' => "'{$session->title}' has been scheduled for {$session->scheduled_at->format('M d, Y at g:i A')}",
-                            'payload' => [
-                                'session_id' => $session->id,
-                                'course_id' => $session->course_id,
-                                'scheduled_at' => $session->scheduled_at->toIso8601String(),
-                            ],
-                        ]);
-
-                        // Send email notification
-                        \Illuminate\Support\Facades\Mail::send(
-                            new \App\Mail\CourseUpdateMail(
-                                $enrollment->user,
-                                $session->course->name ?? $session->course->title,
-                                'live_session',
-                                $session->title,
-                                "Join the live session on {$session->scheduled_at->format('M d, Y at g:i A')}",
-                                $session->scheduled_at->toDateString(),
-                                route('student.sessions.show', $session->id)
-                            )
-                        );
-                    }
-                } catch (\Exception $e) {
-                    Log::error("Failed to send live session notifications: " . $e->getMessage());
-                }
-            })->afterResponse();
+            foreach ($enrolledStudents as $enrollment) {
+                $this->notificationService->dispatch(
+                    NotificationTypes::LIVE_SESSION,
+                    $enrollment->user_id,
+                    [
+                        'title' => 'New Live Session Scheduled',
+                        'body' => "'{$session->title}' has been scheduled for {$session->scheduled_at->format('M d, Y at g:i A')}",
+                        'action_url' => route('student.sessions.show', $session->id),
+                        'session_id' => $session->id,
+                        'course_id' => $session->course_id,
+                        'scheduled_at' => $session->scheduled_at->toIso8601String(),
+                    ],
+                    $session->id
+                );
+            }
 
             return response()->json([
                 'id' => $session->id,
@@ -146,6 +135,9 @@ class SessionController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        // Auto-update stale session statuses before returning results
+        $this->sessionService->autoUpdateStatuses();
+
         $user = $request->user();
         $query = Session::query();
 
@@ -205,6 +197,9 @@ class SessionController extends Controller
      */
     public function show(Request $request, string $id): JsonResponse
     {
+        // Auto-update stale session statuses before returning result
+        $this->sessionService->autoUpdateStatuses();
+
         $user = $request->user();
         $session = Session::with(['course', 'instructor', 'participants.user'])->findOrFail($id);
 

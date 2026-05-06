@@ -145,6 +145,69 @@ class SessionService
     }
 
     /**
+     * Auto-update session statuses based on current time.
+     * - Ends live sessions that have passed their scheduled duration.
+     * - Auto-starts scheduled sessions that have reached their start time.
+     * - Marks scheduled sessions whose window has fully passed as ended.
+     */
+    public function autoUpdateStatuses(): void
+    {
+        $now = now();
+
+        // 1. End live sessions that have passed their scheduled end time
+        $staleLive = Session::where('status', 'live')
+            ->whereNotNull('scheduled_at')
+            ->whereNotNull('duration')
+            ->get()
+            ->filter(fn (Session $s) => $now->greaterThan(
+                $s->scheduled_at->copy()->addMinutes($s->duration)
+            ));
+
+        foreach ($staleLive as $session) {
+            $session->update([
+                'status' => 'ended',
+                'ended_at' => $now,
+            ]);
+            Log::info("Auto-ended session {$session->id} (past scheduled end time)");
+        }
+
+        // 2. Auto-start scheduled sessions that are within their time window
+        $readyScheduled = Session::where('status', 'scheduled')
+            ->whereNotNull('scheduled_at')
+            ->whereNotNull('duration')
+            ->where('scheduled_at', '<=', $now)
+            ->get()
+            ->filter(fn (Session $s) => $now->lessThanOrEqualTo(
+                $s->scheduled_at->copy()->addMinutes($s->duration)
+            ));
+
+        foreach ($readyScheduled as $session) {
+            $session->update([
+                'status' => 'live',
+                'started_at' => $now,
+            ]);
+            Log::info("Auto-started session {$session->id} (scheduled time reached)");
+        }
+
+        // 3. Mark scheduled sessions whose entire window has passed as ended
+        $expiredScheduled = Session::where('status', 'scheduled')
+            ->whereNotNull('scheduled_at')
+            ->whereNotNull('duration')
+            ->get()
+            ->filter(fn (Session $s) => $now->greaterThan(
+                $s->scheduled_at->copy()->addMinutes($s->duration)
+            ));
+
+        foreach ($expiredScheduled as $session) {
+            $session->update([
+                'status' => 'ended',
+                'ended_at' => $now,
+            ]);
+            Log::info("Auto-ended session {$session->id} (never started, window passed)");
+        }
+    }
+
+    /**
      * Get or create session token for a user
      */
     public function getSessionToken(string $sessionId, string $userId): array
