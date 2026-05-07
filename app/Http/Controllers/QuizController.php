@@ -159,34 +159,41 @@ class QuizController extends Controller
      */
     public function startAttempt(Request $request, string $id): JsonResponse
     {
-        $user = Auth::user();
-        $activity = Activity::where('id', $id)
-            ->where('type', 'quiz')
-            ->firstOrFail();
+        try {
+            $user = Auth::user();
+            $activity = Activity::where('id', $id)
+                ->where('type', 'quiz')
+                ->firstOrFail();
 
-        // Get or create the next attempt number
-        $lastAttempt = QuizAttempt::where('activity_id', $id)
-            ->where('student_id', $user->id)
-            ->orderByDesc('attempt_number')
-            ->first();
+            // Get or create the next attempt number
+            $lastAttempt = QuizAttempt::where('activity_id', $id)
+                ->where('student_id', $user->id)
+                ->orderByDesc('attempt_number')
+                ->first();
 
-        $attemptNumber = ($lastAttempt ? $lastAttempt->attempt_number : 0) + 1;
+            $attemptNumber = ($lastAttempt ? $lastAttempt->attempt_number : 0) + 1;
 
-        // Create a new quiz attempt
-        $attempt = QuizAttempt::create([
-            'id' => Str::uuid()->toString(),
-            'activity_id' => $id,
-            'student_id' => $user->id,
-            'course_id' => $activity->course_id,
-            'status' => 'in_progress',
-            'attempt_number' => $attemptNumber,
-            'started_at' => now(),
-        ]);
+            // Create a new quiz attempt
+            $attempt = QuizAttempt::create([
+                'id' => Str::uuid()->toString(),
+                'activity_id' => $id,
+                'student_id' => $user->id,
+                'course_id' => $activity->course_id,
+                'status' => 'in_progress',
+                'attempt_number' => $attemptNumber,
+                'started_at' => now(),
+            ]);
 
-        return response()->json([
-            'message' => 'Quiz attempt started.',
-            'data' => $attempt,
-        ], 201);
+            return response()->json([
+                'message' => 'Quiz attempt started.',
+                'data' => $attempt,
+            ], 201);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => 'Failed to start quiz attempt.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
 
     /**
