@@ -523,6 +523,12 @@ Route::middleware('auth:sanctum')->get('my-submissions',         [AssignmentCont
 Route::middleware('auth:sanctum')->get('submissions/{id}',       [AssignmentController::class, 'show']);
 Route::middleware('auth:sanctum')->put('submissions/{id}/grade', [AssignmentController::class, 'grade']);
 
+// Quiz attempts
+Route::middleware('auth:sanctum')->post('activities/{id}/quiz-attempt', [QuizController::class, 'startAttempt']);
+Route::middleware('auth:sanctum')->get('quiz-attempts/{id}',               [QuizController::class, 'getAttempt']);
+Route::middleware('auth:sanctum')->post('quiz-attempts/{id}/submit',      [QuizController::class, 'submitAttempt']);
+Route::middleware('auth:sanctum')->get('my-quiz-attempts',                 [QuizController::class, 'myAttempts']);
+
 // Attendance logs
 Route::middleware('auth:sanctum')->prefix('attendance-sessions/{id}')->group(function () {
     Route::get('logs',       [AttendanceController::class, 'logs']);

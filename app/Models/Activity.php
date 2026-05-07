@@ -62,6 +62,11 @@ class Activity extends Model
         return $this->hasMany(QuizQuestion::class);
     }
 
+    public function quizAttempts(): HasMany
+    {
+        return $this->hasMany(QuizAttempt::class);
+    }
+
     // ── Assignment ─────────────────────────────────────────────────────
 
     public function assignmentSubmissions(): HasMany

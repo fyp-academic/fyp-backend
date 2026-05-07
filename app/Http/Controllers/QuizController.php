@@ -9,6 +9,9 @@ use Illuminate\Support\Str;
 use App\Models\Activity;
 use App\Models\QuizQuestion;
 use App\Models\QuizAnswer;
+use App\Models\QuizAttempt;
+use App\Models\QuizAttemptResponse;
+use Auth;
 
 class QuizController extends Controller
 {
@@ -148,5 +151,134 @@ class QuizController extends Controller
         ]);
 
         return response()->json(['message' => 'Answer created.', 'data' => $answer], 201);
+    }
+
+    /**
+     * POST /api/v1/activities/{id}/quiz-attempt
+     * Start a new quiz attempt for the authenticated student.
+     */
+    public function startAttempt(Request $request, string $id): JsonResponse
+    {
+        $user = Auth::user();
+        $activity = Activity::where('id', $id)
+            ->where('type', 'quiz')
+            ->firstOrFail();
+
+        // Get or create the next attempt number
+        $lastAttempt = QuizAttempt::where('activity_id', $id)
+            ->where('student_id', $user->id)
+            ->orderByDesc('attempt_number')
+            ->first();
+
+        $attemptNumber = ($lastAttempt ? $lastAttempt->attempt_number : 0) + 1;
+
+        // Create a new quiz attempt
+        $attempt = QuizAttempt::create([
+            'id' => Str::uuid()->toString(),
+            'activity_id' => $id,
+            'student_id' => $user->id,
+            'course_id' => $activity->course_id,
+            'status' => 'in_progress',
+            'attempt_number' => $attemptNumber,
+            'started_at' => now(),
+        ]);
+
+        return response()->json([
+            'message' => 'Quiz attempt started.',
+            'data' => $attempt,
+        ], 201);
+    }
+
+    /**
+     * GET /api/v1/quiz-attempts/{id}
+     * Get a specific quiz attempt with responses.
+     */
+    public function getAttempt(string $id): JsonResponse
+    {
+        $attempt = QuizAttempt::with(['responses.question', 'responses.answer'])
+            ->findOrFail($id);
+
+        return response()->json(['data' => $attempt]);
+    }
+
+    /**
+     * POST /api/v1/quiz-attempts/{id}/submit
+     * Submit a quiz attempt with all student responses.
+     */
+    public function submitAttempt(Request $request, string $id): JsonResponse
+    {
+        $user = Auth::user();
+        $attempt = QuizAttempt::findOrFail($id);
+
+        // Verify ownership
+        if ($attempt->student_id !== $user->id) {
+            return response()->json(['error' => 'Unauthorized'], 403);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'responses' => 'required|array',
+            'responses.*.question_id' => 'required|string|exists:quiz_questions,id',
+            'responses.*.answer_id' => 'sometimes|nullable|string|exists:quiz_answers,id',
+            'responses.*.response_text' => 'sometimes|nullable|string',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        // Store responses
+        $totalScore = 0;
+        $maxScore = 0;
+
+        foreach ($request->responses as $response) {
+            $question = QuizQuestion::findOrFail($response['question_id']);
+            $maxScore += $question->default_mark ?? 1;
+
+            $attemptResponse = QuizAttemptResponse::create([
+                'id' => Str::uuid()->toString(),
+                'attempt_id' => $id,
+                'question_id' => $response['question_id'],
+                'answer_id' => $response['answer_id'] ?? null,
+                'response_text' => $response['response_text'] ?? null,
+                'marks_max' => $question->default_mark ?? 1,
+            ]);
+
+            // Auto-grade multiple choice questions
+            if ($response['answer_id'] ?? null) {
+                $answer = QuizAnswer::findOrFail($response['answer_id']);
+                $marks = ($answer->grade_fraction ?? 0) * ($question->default_mark ?? 1);
+                $attemptResponse->marks_awarded = $marks;
+                $attemptResponse->save();
+                $totalScore += $marks;
+            }
+        }
+
+        // Update attempt
+        $attempt->update([
+            'status' => 'submitted',
+            'submitted_at' => now(),
+            'score' => $totalScore,
+            'max_score' => $maxScore,
+        ]);
+
+        return response()->json([
+            'message' => 'Quiz attempt submitted.',
+            'data' => $attempt->load('responses'),
+        ]);
+    }
+
+    /**
+     * GET /api/v1/my-quiz-attempts
+     * Get all quiz attempts for the authenticated student.
+     */
+    public function myAttempts(): JsonResponse
+    {
+        $user = Auth::user();
+        $attempts = QuizAttempt::where('student_id', $user->id)
+            ->with('activity', 'course')
+            ->orderByDesc('created_at')
+            ->get();
+
+        return response()->json(['data' => $attempts]);
     }
 }
