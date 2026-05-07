@@ -34,6 +34,7 @@ class AssignmentController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'submission_text' => 'sometimes|nullable|string',
+            'file'            => 'sometimes|nullable|file|max:51200', // 50 MB max
             'file_path'       => 'sometimes|nullable|string',
             'file_name'       => 'sometimes|nullable|string|max:255',
             'file_size'       => 'sometimes|nullable|integer|min:0',
@@ -50,6 +51,19 @@ class AssignmentController extends Controller
             ->where('student_id', $user->id)
             ->max('attempt_number') ?? 0;
 
+        $filePath = $request->input('file_path');
+        $fileName = $request->input('file_name');
+        $fileSize = $request->input('file_size');
+
+        // Handle uploaded file
+        if ($request->hasFile('file')) {
+            $uploaded = $request->file('file');
+            $storedPath = $uploaded->store("submissions/{$activity->course_id}/{$id}", 'public');
+            $filePath = $storedPath;
+            $fileName = $uploaded->getClientOriginalName();
+            $fileSize = $uploaded->getSize();
+        }
+
         $submission = AssignmentSubmission::create([
             'id'              => Str::uuid()->toString(),
             'activity_id'     => $id,
@@ -57,9 +71,9 @@ class AssignmentController extends Controller
             'course_id'       => $activity->course_id,
             'status'          => 'submitted',
             'submission_text' => $request->input('submission_text'),
-            'file_path'       => $request->input('file_path'),
-            'file_name'       => $request->input('file_name'),
-            'file_size'       => $request->input('file_size'),
+            'file_path'       => $filePath,
+            'file_name'       => $fileName,
+            'file_size'       => $fileSize,
             'submitted_at'    => now(),
             'attempt_number'  => $lastAttempt + 1,
             'late'            => $activity->due_date && now()->greaterThan($activity->due_date),
@@ -136,6 +150,7 @@ class AssignmentController extends Controller
                 'status' => $submission->status,
                 'submission_text' => $submission->submission_text,
                 'file_name' => $submission->file_name,
+                'file_url' => $submission->file_path ? asset('storage/' . $submission->file_path) : null,
                 'attempt_number' => $submission->attempt_number,
                 'submitted_at' => $submission->submitted_at,
                 'grade' => $submission->grade,
