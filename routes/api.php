@@ -127,6 +127,7 @@ Route::prefix('v1')->group(function () {
         // ─────────────────────────────────────────────────────────────────────
         Route::get('/sections/{id}/activities', [ActivityController::class, 'indexPublic']);
         Route::get('/activities/{id}', [ActivityController::class, 'showPublic']);
+        Route::get('/activities/{id}/questions', [QuizController::class, 'index']);
 
         // ─────────────────────────────────────────────────────────────────────
         // COURSES & ENROLLMENT (Admin or Instructor)
@@ -203,8 +204,7 @@ Route::prefix('v1')->group(function () {
             Route::put('/{id}',    [ActivityController::class, 'update']);
             Route::delete('/{id}', [ActivityController::class, 'destroy']);
 
-            // Quiz questions nested under activity
-            Route::get('/{id}/questions',  [QuizController::class, 'index']);
+            // Quiz questions nested under activity (admin only: create)
             Route::post('/{id}/questions', [QuizController::class, 'store']);
 
             // Assignment submissions
