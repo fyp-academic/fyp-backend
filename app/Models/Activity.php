@@ -21,6 +21,7 @@ class Activity extends Model
         'feedback', 'file', 'folder', 'forum',
         'glossary', 'h5p', 'ims_content_package', 'lesson',
         'page', 'quiz', 'scorm', 'text_and_media_area',
+        'url', 'label', 'workshop', 'video',
     ];
 
     protected $fillable = [

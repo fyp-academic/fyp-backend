@@ -102,7 +102,7 @@ class CourseController extends Controller
                 ->pluck('course_id')
                 ->toArray();
 
-            $query = Course::with(['category', 'instructor', 'sections'])
+            $query = Course::with(['category', 'instructor', 'sections.activities'])
                 ->whereIn('id', $enrolledCourseIds);
 
             $courses = $query->orderBy('created_at', 'desc')->get();

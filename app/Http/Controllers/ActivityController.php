@@ -65,16 +65,19 @@ class ActivityController extends Controller
         $activity = Activity::findOrFail($id);
         $course = \App\Models\Course::findOrFail($activity->course_id);
 
-        // Check if user is enrolled
+        // Check if user is enrolled or has course access (instructor/admin)
         $isEnrolled = \App\Models\Enrollment::where('user_id', $user?->id)
             ->where('course_id', $activity->course_id)
             ->exists();
 
-        if (!$isEnrolled && $course->visibility !== 'shown') {
+        $canAccess = $isEnrolled || \App\Policies\RolePolicy::canAccessCourse($user, $course);
+
+        if (!$canAccess && $course->visibility !== 'shown') {
             return response()->json(['message' => 'Access denied.'], 403);
         }
 
-        if (!$activity->visible) {
+        // Instructors and admins can view hidden activities; students cannot
+        if (!$activity->visible && !\App\Policies\RolePolicy::canAccessCourse($user, $course)) {
             return response()->json(['message' => 'Activity not available.'], 403);
         }
 

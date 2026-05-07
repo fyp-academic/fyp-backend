@@ -31,6 +31,7 @@ use App\Http\Controllers\MessageController;
 use App\Http\Controllers\CollegeController;
 use App\Http\Controllers\DegreeProgrammeController;
 use App\Http\Controllers\SessionController;
+use App\Http\Controllers\VideoController;
 
 Route::prefix('v1')->group(function () {
 
@@ -233,6 +234,10 @@ Route::prefix('v1')->group(function () {
             Route::post('/{id}/db-fields',  [DatabaseActivityController::class, 'storeField']);
             Route::get('/{id}/db-entries',  [DatabaseActivityController::class, 'entries']);
             Route::post('/{id}/db-entries', [DatabaseActivityController::class, 'storeEntry']);
+
+            // Video upload
+            Route::post('/{id}/video-upload', [VideoController::class, 'upload']);
+            Route::delete('/{id}/video',      [VideoController::class, 'destroy']);
 
             // Feedback questions & responses
             Route::get('/{id}/feedback-questions',   [FeedbackController::class, 'questions']);
