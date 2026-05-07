@@ -11,7 +11,7 @@ use App\Models\QuizQuestion;
 use App\Models\QuizAnswer;
 use App\Models\QuizAttempt;
 use App\Models\QuizAttemptResponse;
-use Auth;
+use Illuminate\Support\Facades\Auth;
 
 class QuizController extends Controller
 {
