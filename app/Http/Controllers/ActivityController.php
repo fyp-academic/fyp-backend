@@ -131,13 +131,13 @@ class ActivityController extends Controller
 
         foreach ($enrolledStudents as $studentId) {
             Notification::create([
-                'id'      => Str::uuid()->toString(),
                 'user_id' => $studentId,
-                'title'   => 'New ' . ucfirst($request->type) . ' Added',
-                'message' => "A new {$request->type} '{$request->name}' has been added to your course.",
                 'type'    => 'course_update',
-                'data'    => json_encode(['course_id' => $section->course_id, 'activity_id' => $activity->id, 'activity_type' => $request->type]),
-                'read'    => false,
+                'channel' => 'in_app',
+                'title'   => 'New ' . ucfirst($request->type) . ' Added',
+                'body'    => "A new {$request->type} '{$request->name}' has been added to your course.",
+                'payload' => ['course_id' => $section->course_id, 'activity_id' => $activity->id, 'activity_type' => $request->type],
+                'status'  => 'pending',
             ]);
         }
 

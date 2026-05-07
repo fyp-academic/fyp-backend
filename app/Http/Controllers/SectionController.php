@@ -96,13 +96,13 @@ class SectionController extends Controller
 
         foreach ($enrolledStudents as $studentId) {
             Notification::create([
-                'id'      => Str::uuid()->toString(),
                 'user_id' => $studentId,
-                'title'   => 'New Section Added',
-                'message' => "A new section '{$request->title}' has been added to your course.",
                 'type'    => 'course_update',
-                'data'    => json_encode(['course_id' => $id, 'section_id' => $section->id]),
-                'read'    => false,
+                'channel' => 'in_app',
+                'title'   => 'New Section Added',
+                'body'    => "A new section '{$request->title}' has been added to your course.",
+                'payload' => ['course_id' => $id, 'section_id' => $section->id],
+                'status'  => 'pending',
             ]);
         }
 
