@@ -44,6 +44,14 @@ class AssignmentController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
+        // Validate that at least one submission type is provided
+        $hasText = !empty($request->input('submission_text'));
+        $hasFile = $request->hasFile('file') || !empty($request->input('file_path'));
+        
+        if (!$hasText && !$hasFile) {
+            return response()->json(['errors' => ['submission' => 'Please provide either submission text or a file.']], 422);
+        }
+
         $activity = Activity::findOrFail($id);
         $user     = $request->user();
 
@@ -86,9 +94,18 @@ class AssignmentController extends Controller
      * GET /api/v1/submissions/{id}
      * Show a single submission.
      */
-    public function show(string $id): JsonResponse
+    public function show(Request $request, string $id): JsonResponse
     {
         $submission = AssignmentSubmission::with(['student', 'grader'])->findOrFail($id);
+        $user = $request->user();
+
+        // Check if user is the student who submitted, or an instructor/admin for the course
+        $isOwner = $submission->student_id === $user->id;
+        $isInstructor = $user->hasRole('instructor') || $user->hasRole('admin');
+        
+        if (!$isOwner && !$isInstructor) {
+            return response()->json(['message' => 'Forbidden. You can only view your own submissions.'], 403);
+        }
 
         return response()->json(['data' => $submission]);
     }
@@ -99,6 +116,13 @@ class AssignmentController extends Controller
      */
     public function grade(Request $request, string $id): JsonResponse
     {
+        $user = $request->user();
+        
+        // Only instructors and admins can grade
+        if (!($user->hasRole('instructor') || $user->hasRole('admin'))) {
+            return response()->json(['message' => 'Forbidden. Only instructors and admins can grade submissions.'], 403);
+        }
+
         $validator = Validator::make($request->all(), [
             'grade'    => 'required|numeric|min:0',
             'feedback' => 'sometimes|nullable|string',

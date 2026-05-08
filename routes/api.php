@@ -207,9 +207,8 @@ Route::prefix('v1')->group(function () {
             // Quiz questions nested under activity (admin only: create)
             Route::post('/{id}/questions', [QuizController::class, 'store']);
 
-            // Assignment submissions
+            // Assignment submissions (students use public POST endpoint below)
             Route::get('/{id}/submissions',  [AssignmentController::class, 'index']);
-            Route::post('/{id}/submissions', [AssignmentController::class, 'store']);
 
             // Attendance sessions
             Route::get('/{id}/attendance-sessions',  [AttendanceController::class, 'sessions']);
@@ -421,14 +420,14 @@ Route::prefix('v1')->group(function () {
         });
 
         // ─────────────────────────────────────────────────────────────────────
-        // MOODLE TOOLS — standalone sub-resource mutations
+        // INTERVENTIONS — feedback evaluations (standalone)
         // ─────────────────────────────────────────────────────────────────────
+        Route::prefix('interventions')->group(function () {
+            Route::get('/{id}/evaluation',  [LearnerAnalyticsController::class, 'feedbackEvaluation']);
+            Route::post('/{id}/evaluation', [LearnerAnalyticsController::class, 'submitEvaluation']);
+        });
 
-        // Assignment submissions
-        Route::get('submissions/{id}',       [AssignmentController::class, 'show']);
-        Route::put('submissions/{id}/grade', [AssignmentController::class, 'grade']);
-
-        // Attendance logs
+        // Attendance logs - other endpoints handled below
         Route::prefix('attendance-sessions/{id}')->group(function () {
             Route::get('logs',       [AttendanceController::class, 'logs']);
             Route::post('logs',      [AttendanceController::class, 'recordAttendance']);
@@ -519,12 +518,12 @@ Route::middleware('auth:sanctum')->prefix('interventions')->group(function () {
 // ─────────────────────────────────────────────────────────────────────
 
 // Assignment submissions
-Route::middleware('auth:sanctum')->get('my-submissions',         [AssignmentController::class, 'mySubmissions']);
-Route::middleware('auth:sanctum')->get('submissions/{id}',       [AssignmentController::class, 'show']);
+Route::middleware('auth:sanctum')->post('activities/{id}/submissions', [AssignmentController::class, 'store']);
+Route::middleware('auth:sanctum')->get('my-submissions', [AssignmentController::class, 'mySubmissions']);
+Route::middleware('auth:sanctum')->get('submissions/{id}', [AssignmentController::class, 'show']);
 Route::middleware('auth:sanctum')->put('submissions/{id}/grade', [AssignmentController::class, 'grade']);
 
 // Quiz attempts
-Route::middleware('auth:sanctum')->post('activities/{id}/quiz-attempt', [QuizController::class, 'startAttempt']);
 Route::middleware('auth:sanctum')->get('quiz-attempts/{id}',               [QuizController::class, 'getAttempt']);
 Route::middleware('auth:sanctum')->post('quiz-attempts/{id}/submit',      [QuizController::class, 'submitAttempt']);
 Route::middleware('auth:sanctum')->get('my-quiz-attempts',                 [QuizController::class, 'myAttempts']);
