@@ -19,9 +19,30 @@ class AssignmentController extends Controller
     {
         $activity    = Activity::findOrFail($id);
         $submissions = AssignmentSubmission::where('activity_id', $id)
-            ->with('student')
+            ->with(['student', 'grader'])
             ->orderBy('submitted_at', 'desc')
-            ->get();
+            ->get()
+            ->map(function ($submission) {
+                return [
+                    'id' => $submission->id,
+                    'activity_id' => $submission->activity_id,
+                    'student_id' => $submission->student_id,
+                    'student_name' => $submission->student ? $submission->student->name : 'Unknown',
+                    'course_id' => $submission->course_id,
+                    'status' => $submission->status,
+                    'submission_text' => $submission->submission_text,
+                    'file_path' => $submission->file_path,
+                    'file_name' => $submission->file_name,
+                    'file_size' => $submission->file_size,
+                    'submitted_at' => $submission->submitted_at,
+                    'grade' => $submission->grade,
+                    'feedback' => $submission->feedback,
+                    'graded_by' => $submission->graded_by,
+                    'graded_at' => $submission->graded_at,
+                    'attempt_number' => $submission->attempt_number,
+                    'late' => $submission->late,
+                ];
+            });
 
         return response()->json(['data' => $submissions, 'activity_id' => $id]);
     }
@@ -107,7 +128,27 @@ class AssignmentController extends Controller
             return response()->json(['message' => 'Forbidden. You can only view your own submissions.'], 403);
         }
 
-        return response()->json(['data' => $submission]);
+        return response()->json([
+            'data' => [
+                'id' => $submission->id,
+                'activity_id' => $submission->activity_id,
+                'student_id' => $submission->student_id,
+                'student_name' => $submission->student ? $submission->student->name : 'Unknown',
+                'course_id' => $submission->course_id,
+                'status' => $submission->status,
+                'submission_text' => $submission->submission_text,
+                'file_path' => $submission->file_path,
+                'file_name' => $submission->file_name,
+                'file_size' => $submission->file_size,
+                'submitted_at' => $submission->submitted_at,
+                'grade' => $submission->grade,
+                'feedback' => $submission->feedback,
+                'graded_by' => $submission->graded_by,
+                'graded_at' => $submission->graded_at,
+                'attempt_number' => $submission->attempt_number,
+                'late' => $submission->late,
+            ]
+        ]);
     }
 
     /**
