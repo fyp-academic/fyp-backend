@@ -250,4 +250,61 @@ class NotificationService
     {
         return cache()->get("user:{$userId}:notifications:muted", false);
     }
+
+    /**
+     * Send an in-app notification immediately (marked as sent) respecting user preferences.
+     * Used for course updates where students should see the notification right away.
+     */
+    public function sendToUser(
+        string $userId,
+        string $type,
+        string $channel,
+        string $title,
+        string $body,
+        array $payload = [],
+        ?string $contextId = null
+    ): ?Notification {
+        // Check if user has this type enabled for the channel; create default if missing
+        $pref = NotificationPreference::where([
+            'user_id' => $userId,
+            'notification_type' => $type,
+            'channel' => $channel,
+            'enabled' => true,
+        ])->first();
+
+        if (!$pref) {
+            // Create default preference if none exists (like dispatch does)
+            $defaultChannels = NotificationTypes::getDefaultChannels($type);
+            if (!in_array($channel, $defaultChannels)) {
+                return null; // Channel not in defaults for this type
+            }
+            $pref = NotificationPreference::create([
+                'user_id' => $userId,
+                'notification_type' => $type,
+                'channel' => $channel,
+                'enabled' => true,
+                'digest_mode' => 'instant',
+            ]);
+        }
+
+        // Check for duplicates
+        $dedupKey = $this->generateDedupKey($type, $userId, $contextId);
+        if ($this->isDuplicate($dedupKey)) {
+            return null;
+        }
+
+        // Create in-app notification marked as sent (visible immediately)
+        return Notification::create([
+            'user_id' => $userId,
+            'type' => $type,
+            'channel' => $channel,
+            'title' => $title,
+            'body' => $body,
+            'payload' => $payload,
+            'dedup_key' => $dedupKey,
+            'status' => 'sent', // Mark as sent so it appears immediately
+            'sent_at' => now(),
+            'retry_count' => 0,
+        ]);
+    }
 }

@@ -11,9 +11,13 @@ use App\Models\Section;
 use App\Models\Activity;
 use App\Models\Enrollment;
 use App\Models\Notification;
+use App\Services\NotificationService;
 
 class ActivityController extends Controller
 {
+    public function __construct(private NotificationService $notificationService)
+    {
+    }
     /**
      * GET /api/v1/sections/{id}/activities
      * Return all activities within a section ordered by sort_order.
@@ -124,21 +128,20 @@ class ActivityController extends Controller
             'settings'          => $request->input('settings'),
         ]);
 
-        // Notify enrolled students about new content
+        // Notify enrolled students
         $enrolledStudents = Enrollment::where('course_id', $section->course_id)
-            ->where('role', 'student')
-            ->pluck('user_id');
+            ->pluck('user_id')
+            ->toArray();
 
         foreach ($enrolledStudents as $studentId) {
-            Notification::create([
-                'user_id' => $studentId,
-                'type'    => 'course_update',
-                'channel' => 'in_app',
-                'title'   => 'New ' . ucfirst($request->type) . ' Added',
-                'body'    => "A new {$request->type} '{$request->name}' has been added to your course.",
-                'payload' => ['course_id' => $section->course_id, 'activity_id' => $activity->id, 'activity_type' => $request->type],
-                'status'  => 'pending',
-            ]);
+            $this->notificationService->sendToUser(
+                $studentId,
+                'course_update',
+                'in_app',
+                'New ' . ucfirst($request->type) . ' Added',
+                "A new {$request->type} '{$request->name}' has been added to your course.",
+                ['course_id' => $section->course_id, 'activity_id' => $activity->id, 'activity_type' => $request->type]
+            );
         }
 
         return response()->json(['message' => 'Activity created.', 'data' => $activity], 201);

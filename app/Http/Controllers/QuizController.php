@@ -11,10 +11,17 @@ use App\Models\QuizQuestion;
 use App\Models\QuizAnswer;
 use App\Models\QuizAttempt;
 use App\Models\QuizAttemptResponse;
+use App\Models\Course;
+use App\Services\NotificationService;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
 
 class QuizController extends Controller
 {
+    public function __construct(private NotificationService $notificationService)
+    {
+    }
+
     /**
      * GET /api/v1/activities/{id}/questions
      * Return all questions in the question bank for a quiz activity.
@@ -236,10 +243,16 @@ class QuizController extends Controller
         // Store responses
         $totalScore = 0;
         $maxScore = 0;
+        $needsGrading = false;
 
         foreach ($request->responses as $response) {
             $question = QuizQuestion::findOrFail($response['question_id']);
             $maxScore += $question->default_mark ?? 1;
+
+            $hasAnswer = !empty($response['answer_id'] ?? null);
+            if (!$hasAnswer && !empty($response['response_text'] ?? null)) {
+                $needsGrading = true;
+            }
 
             $attemptResponse = QuizAttemptResponse::create([
                 'id' => Str::uuid()->toString(),
@@ -251,7 +264,7 @@ class QuizController extends Controller
             ]);
 
             // Auto-grade multiple choice questions
-            if ($response['answer_id'] ?? null) {
+            if ($hasAnswer) {
                 $answer = QuizAnswer::findOrFail($response['answer_id']);
                 $marks = ($answer->grade_fraction ?? 0) * ($question->default_mark ?? 1);
                 $attemptResponse->marks_awarded = $marks;
@@ -268,9 +281,43 @@ class QuizController extends Controller
             'max_score' => $maxScore,
         ]);
 
+        $percentage = $maxScore > 0 ? round(($totalScore / $maxScore) * 100, 2) : 0;
+
+        $attempt->load('responses');
+        $attempt->needs_grading = $needsGrading;
+        $attempt->score_percentage = $percentage;
+
+        // Notify instructor of quiz submission
+        try {
+            $activity = Activity::findOrFail($attempt->activity_id);
+            $course = Course::findOrFail($activity->course_id);
+            $instructorId = $course->instructor_id;
+
+            $this->notificationService->sendToUser(
+                $instructorId,
+                'new_submission',
+                'in_app',
+                'New Quiz Submission',
+                "A student has submitted a quiz attempt for '{$activity->name}'.",
+                [
+                    'activity_id' => $activity->id,
+                    'activity_type' => 'quiz',
+                    'attempt_id' => $attempt->id,
+                    'course_id' => $course->id,
+                    'needs_grading' => $needsGrading,
+                ],
+                $attempt->id
+            );
+        } catch (\Exception $e) {
+            Log::warning('Failed to send instructor notification for quiz submission', [
+                'attempt_id' => $attempt->id,
+                'error' => $e->getMessage(),
+            ]);
+        }
+
         return response()->json([
             'message' => 'Quiz attempt submitted.',
-            'data' => $attempt->load('responses'),
+            'data' => $attempt,
         ]);
     }
 
