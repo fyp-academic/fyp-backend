@@ -23,8 +23,8 @@ class InAppAdapter implements ChannelAdapterInterface
             ]);
 
             // Emit WebSocket event for real-time delivery
-            // Using Laravel Reverb broadcasting
-            broadcast(new NotificationCreated($notification))->toOthers();
+            // Using Laravel Reverb broadcasting - broadcast to ALL (including sender) so they see their own notifications
+            broadcast(new NotificationCreated($notification));
 
             Log::info('In-app notification sent', [
                 'notification_id' => $notification->id,
