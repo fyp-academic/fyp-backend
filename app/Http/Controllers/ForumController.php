@@ -9,9 +9,13 @@ use Illuminate\Support\Str;
 use App\Models\Activity;
 use App\Models\ForumDiscussion;
 use App\Models\ForumPost;
+use App\Services\EngagementComputationService;
+use Illuminate\Support\Facades\Log;
 
 class ForumController extends Controller
 {
+    public function __construct(private EngagementComputationService $engagement) {}
+
     // ── Discussions ─────────────────────────────────────────────────────
 
     /**
@@ -67,7 +71,22 @@ class ForumController extends Controller
             'user_id'       => $user->id,
             'subject'       => $request->title,
             'content'       => $request->content,
+            'depth_level'   => 0,
         ]);
+
+        try {
+            $this->engagement->logEvent(
+                userId:       $user->id,
+                eventType:    'forum_post',
+                courseId:     $activity->course_id,
+                resourceType: 'forum_discussion',
+                resourceId:   $discussion->id,
+                metadata:     ['depth_level' => 0, 'word_count' => str_word_count($request->content)],
+                loginSessionId: $request->input('login_session_id'),
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Engagement: failed to log forum_post', ['discussion' => $discussion->id, 'error' => $e->getMessage()]);
+        }
 
         return response()->json(['message' => 'Discussion created.', 'data' => $discussion], 201);
     }
@@ -110,15 +129,37 @@ class ForumController extends Controller
             return response()->json(['message' => 'Discussion is locked.'], 403);
         }
 
+        $parentId  = $request->input('parent_id');
+        $depthLevel = 1;
+        if ($parentId) {
+            $parent = ForumPost::find($parentId);
+            $depthLevel = $parent ? (($parent->depth_level ?? 0) + 1) : 1;
+        }
+
         $post = ForumPost::create([
             'id'            => Str::uuid()->toString(),
             'discussion_id' => $id,
             'user_id'       => $request->user()->id,
-            'parent_id'     => $request->input('parent_id'),
+            'parent_id'     => $parentId,
             'content'       => $request->content,
+            'depth_level'   => $depthLevel,
         ]);
 
         $discussion->increment('post_count');
+
+        try {
+            $this->engagement->logEvent(
+                userId:       $request->user()->id,
+                eventType:    'forum_reply',
+                courseId:     $discussion->course_id,
+                resourceType: 'forum_discussion',
+                resourceId:   $id,
+                metadata:     ['post_id' => $post->id, 'depth_level' => $depthLevel, 'word_count' => str_word_count($request->content)],
+                loginSessionId: $request->input('login_session_id'),
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Engagement: failed to log forum_reply', ['discussion' => $id, 'error' => $e->getMessage()]);
+        }
 
         return response()->json(['message' => 'Reply posted.', 'data' => $post], 201);
     }

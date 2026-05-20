@@ -167,4 +167,11 @@ class Activity extends Model
     {
         return $this->hasMany(ScormTrack::class);
     }
+
+    // ── Course Materials ──────────────────────────────────────────────
+
+    public function courseMaterials(): HasMany
+    {
+        return $this->hasMany(CourseMaterial::class);
+    }
 }

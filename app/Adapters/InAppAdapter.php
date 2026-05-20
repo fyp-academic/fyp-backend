@@ -2,6 +2,7 @@
 
 namespace App\Adapters;
 
+use App\Events\NotificationBadgeUpdated;
 use App\Events\NotificationCreated;
 use App\Models\Notification;
 use Illuminate\Support\Facades\Log;
@@ -25,6 +26,13 @@ class InAppAdapter implements ChannelAdapterInterface
             // Emit WebSocket event for real-time delivery
             // Using Laravel Reverb broadcasting - broadcast to ALL (including sender) so they see their own notifications
             broadcast(new NotificationCreated($notification));
+
+            // Broadcast updated unread count so badge refreshes immediately
+            $unreadCount = Notification::where('user_id', $notification->user_id)
+                ->where('channel', 'in_app')
+                ->whereIn('status', ['sent', 'delivered'])
+                ->count();
+            broadcast(new NotificationBadgeUpdated($notification->user_id, $unreadCount));
 
             Log::info('In-app notification sent', [
                 'notification_id' => $notification->id,

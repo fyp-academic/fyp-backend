@@ -4,8 +4,11 @@ namespace App\Http\Controllers;
 
 use App\Constants\NotificationTypes;
 use App\Models\Session;
+use App\Models\SessionParticipant;
+use App\Models\SessionPoll;
 use App\Models\SessionRecording;
 use App\Models\User;
+use App\Services\EngagementComputationService;
 use App\Services\Jitsi\AIService;
 use App\Services\Jitsi\JitsiTokenService;
 use App\Services\Jitsi\RecordingService;
@@ -25,6 +28,7 @@ class SessionController extends Controller
     private JitsiTokenService $tokenService;
     private RateLimiterService $rateLimiterService;
     private NotificationService $notificationService;
+    private EngagementComputationService $engagement;
 
     public function __construct(
         SessionService $sessionService,
@@ -32,7 +36,8 @@ class SessionController extends Controller
         AIService $aiService,
         JitsiTokenService $tokenService,
         RateLimiterService $rateLimiterService,
-        NotificationService $notificationService
+        NotificationService $notificationService,
+        EngagementComputationService $engagement
     ) {
         $this->sessionService = $sessionService;
         $this->recordingService = $recordingService;
@@ -40,6 +45,7 @@ class SessionController extends Controller
         $this->tokenService = $tokenService;
         $this->rateLimiterService = $rateLimiterService;
         $this->notificationService = $notificationService;
+        $this->engagement = $engagement;
     }
 
     /**
@@ -270,6 +276,26 @@ class SessionController extends Controller
 
         try {
             $tokenData = $this->sessionService->getSessionToken($id, $user->id);
+
+            // Engagement: record join punctuality (negative = early, positive = late minutes)
+            try {
+                if ($session->scheduled_at) {
+                    $punctualityMinutes = (int) $session->scheduled_at->diffInMinutes(now(), false);
+                    SessionParticipant::where('session_id', $id)
+                        ->where('user_id', $user->id)
+                        ->update(['join_punctuality_minutes' => $punctualityMinutes]);
+                }
+                $this->engagement->logEvent(
+                    userId:       $user->id,
+                    eventType:    'content_view',
+                    courseId:     $session->course_id,
+                    resourceType: 'video_session',
+                    resourceId:   $id,
+                    loginSessionId: $request->input('login_session_id'),
+                );
+            } catch (\Throwable $engEx) {
+                Log::warning('Engagement: failed to record join punctuality', ['session' => $id, 'error' => $engEx->getMessage()]);
+            }
 
             return response()->json([
                 'token' => $tokenData['token'],
@@ -786,6 +812,33 @@ class SessionController extends Controller
         try {
             $this->sessionService->participantLeft($id, $user->id);
 
+            // Engagement: record participation duration and close the session streak
+            try {
+                $participant = SessionParticipant::where('session_id', $id)
+                    ->where('user_id', $user->id)
+                    ->first();
+
+                if ($participant && $participant->joined_at) {
+                    $durationSeconds = (int) $participant->joined_at->diffInSeconds(now());
+                    $participant->update(['participation_duration_seconds' => $durationSeconds]);
+                }
+
+                $session = Session::find($id);
+                if ($session) {
+                    $this->engagement->logEvent(
+                        userId:       $user->id,
+                        eventType:    'activity_complete',
+                        courseId:     $session->course_id,
+                        resourceType: 'video_session',
+                        resourceId:   $id,
+                        value:        isset($durationSeconds) ? round($durationSeconds / 60, 1) : null,
+                        loginSessionId: $request->input('login_session_id'),
+                    );
+                }
+            } catch (\Throwable $engEx) {
+                Log::warning('Engagement: failed to record participation duration', ['session' => $id, 'error' => $engEx->getMessage()]);
+            }
+
             return response()->json(['message' => 'Participant marked as left']);
 
         } catch (\Exception $e) {
@@ -893,6 +946,28 @@ class SessionController extends Controller
         try {
             $pollService = new \App\Services\Jitsi\PollService();
             $vote = $pollService->vote($pollId, $user->id, $request->option_index);
+
+            // Engagement: increment poll_responses_count on the participant record
+            try {
+                $poll = SessionPoll::find($pollId);
+                if ($poll) {
+                    SessionParticipant::where('session_id', $poll->session_id)
+                        ->where('user_id', $user->id)
+                        ->increment('poll_responses_count');
+
+                    $this->engagement->logEvent(
+                        userId:       $user->id,
+                        eventType:    'content_view',
+                        courseId:     Session::find($poll->session_id)?->course_id,
+                        resourceType: 'session_poll',
+                        resourceId:   $pollId,
+                        metadata:     ['option_index' => $request->option_index],
+                        loginSessionId: $request->input('login_session_id'),
+                    );
+                }
+            } catch (\Throwable $engEx) {
+                Log::warning('Engagement: failed to record poll response', ['poll' => $pollId, 'error' => $engEx->getMessage()]);
+            }
 
             return response()->json([
                 'vote_id' => $vote->id,

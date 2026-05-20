@@ -18,6 +18,8 @@ class CognitiveSignal extends Model
         'quiz_first_attempt_score', 'quiz_final_attempt_score', 'quiz_learning_delta',
         'discussion_depth_score', 'avg_post_word_count', 'question_count', 'assertion_count',
         'peer_response_rate', 'optional_resource_access_rate', 'feedback_uptake_lag_hours',
+        'assignment_revision_count', 'quiz_question_skip_rate',
+        'avg_time_per_question_seconds', 'material_completion_depth',
         'normalised_values', 'colour_flags', 'raw_data', 'computed_at',
     ];
 

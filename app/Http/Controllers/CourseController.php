@@ -9,6 +9,7 @@ use Illuminate\Support\Str;
 use App\Models\Course;
 use App\Models\Category;
 use App\Models\Enrollment;
+use App\Models\UserActivityCompletion;
 use App\Models\User;
 use App\Models\DegreeProgramme;
 use App\Policies\RolePolicy;
@@ -108,7 +109,13 @@ class CourseController extends Controller
             $courses = $query->orderBy('created_at', 'desc')->get();
 
             // Transform to ensure instructor is a string name and sections is array
-            $transformed = $courses->map(function ($course) use ($user) {
+            // Index enrollments by course_id for O(1) lookup
+            $enrollmentMap = Enrollment::where('user_id', $user->id)
+                ->whereIn('course_id', $enrolledCourseIds)
+                ->get(['course_id', 'progress'])
+                ->keyBy('course_id');
+
+            $transformed = $courses->map(function ($course) use ($user, $enrollmentMap) {
                 $arr = $course->toArray();
                 if (isset($arr['instructor']) && is_array($arr['instructor'])) {
                     $arr['instructor'] = $arr['instructor']['name'] ?? $arr['instructor_name'] ?? 'Unknown';
@@ -119,7 +126,26 @@ class CourseController extends Controller
                 if (!isset($arr['sections'])) {
                     $arr['sections'] = [];
                 }
-                $arr['is_enrolled'] = true; // All these are enrolled
+                // Live per-user progress from activity completions
+                $totalActivities     = $course->sections->flatMap->activities->count();
+                $completedActivities = UserActivityCompletion::where('user_id', $user->id)
+                    ->where('course_id', $course->id)
+                    ->count();
+                $progress = $totalActivities > 0
+                    ? (int) round($completedActivities / $totalActivities * 100)
+                    : (float) ($enrollmentMap[$course->id]->progress ?? 0);
+
+                $totalSections     = $course->sections->count();
+                $completedSections = $totalActivities > 0
+                    ? $completedActivities
+                    : (int) round($totalSections * $progress / 100);
+
+                $arr['is_enrolled']           = true;
+                $arr['completion_rate']        = $progress;
+                $arr['total_activities']       = $totalActivities;
+                $arr['completed_activities']   = $completedActivities;
+                $arr['total_sections']         = $totalSections;
+                $arr['completed_sections']     = $completedSections;
                 return $arr;
             });
 

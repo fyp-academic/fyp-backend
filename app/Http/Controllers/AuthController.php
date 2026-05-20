@@ -22,9 +22,12 @@ use App\Models\DegreeProgramme;
 use App\Policies\RolePolicy;
 use Illuminate\Support\Str;
 use Laravel\Sanctum\PersonalAccessToken;
+use App\Services\EngagementComputationService;
 
 class AuthController extends Controller
 {
+    public function __construct(private EngagementComputationService $engagement) {}
+
     /**
      * Nationality mapping from registration number prefix.
      */
@@ -366,10 +369,24 @@ class AuthController extends Controller
 
         $token = $user->createToken('api-token')->plainTextToken;
 
+        // Open engagement login session
+        $loginSessionId = null;
+        try {
+            $loginSession = $this->engagement->openLoginSession(
+                $user->id,
+                $request->input('device_type', 'desktop'),
+                $request->ip()
+            );
+            $loginSessionId = $loginSession->id;
+        } catch (\Throwable $e) {
+            Log::warning('Engagement: failed to open login session', ['user' => $user->id, 'error' => $e->getMessage()]);
+        }
+
         // Prepare response with role-based data
         $response = [
             'user' => $user,
             'token' => $token,
+            'login_session_id' => $loginSessionId,
             'permissions' => [
                 'can_manage_colleges' => RolePolicy::canManageColleges($user),
                 'can_manage_degree_programmes' => RolePolicy::canManageDegreeProgrammes($user),
@@ -739,6 +756,16 @@ class AuthController extends Controller
      */
     public function logout(Request $request): JsonResponse
     {
+        // Close engagement login session if provided
+        try {
+            $sessionId = $request->input('login_session_id');
+            if ($sessionId) {
+                $this->engagement->closeLoginSession($sessionId);
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Engagement: failed to close login session', ['error' => $e->getMessage()]);
+        }
+
         $request->user()->currentAccessToken()->delete();
 
         return response()->json(['message' => 'Logged out successfully.']);

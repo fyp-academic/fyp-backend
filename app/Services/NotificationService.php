@@ -3,6 +3,8 @@
 namespace App\Services;
 
 use App\Constants\NotificationTypes;
+use App\Events\NotificationBadgeUpdated;
+use App\Events\NotificationCreated;
 use App\Jobs\SendNotificationJob;
 use App\Models\Notification;
 use App\Models\NotificationPreference;
@@ -294,7 +296,7 @@ class NotificationService
         }
 
         // Create in-app notification marked as sent (visible immediately)
-        return Notification::create([
+        $notification = Notification::create([
             'user_id' => $userId,
             'type' => $type,
             'channel' => $channel,
@@ -306,5 +308,15 @@ class NotificationService
             'sent_at' => now(),
             'retry_count' => 0,
         ]);
+
+        // Broadcast real-time events
+        broadcast(new NotificationCreated($notification));
+        $unreadCount = Notification::where('user_id', $userId)
+            ->where('channel', 'in_app')
+            ->whereIn('status', ['sent', 'delivered'])
+            ->count();
+        broadcast(new NotificationBadgeUpdated($userId, $unreadCount));
+
+        return $notification;
     }
 }

@@ -185,6 +185,34 @@ class NotificationController extends Controller
     }
 
     /**
+     * PATCH /api/v1/notifications/{id}/click
+     * Record that the user clicked (acted on) a notification — sets clicked_at.
+     */
+    public function markClicked(Request $request, int $id): JsonResponse
+    {
+        $channel = $request->input('channel', 'in_app');
+        $notification = Notification::where('user_id', $request->user()->id)
+            ->where('id', $id)
+            ->where('channel', $channel)
+            ->firstOrFail();
+
+        if (!$notification->clicked_at) {
+            $notification->clicked_at = now();
+            if ($notification->status !== 'read') {
+                $notification->status  = 'read';
+                $notification->read_at = now();
+            }
+            $notification->save();
+        }
+
+        return response()->json([
+            'message'    => 'Notification marked as clicked.',
+            'id'         => $id,
+            'clicked_at' => $notification->clicked_at,
+        ]);
+    }
+
+    /**
      * DELETE /api/v1/notifications/{id}
      * Permanently delete a single notification.
      */
@@ -416,7 +444,7 @@ class NotificationController extends Controller
     /**
      * Calculate unread notification count for a user (filtered by channel and preferences).
      */
-    private function calculateUnreadCount(int $userId, string $channel = 'in_app'): int
+    private function calculateUnreadCount(string $userId, string $channel = 'in_app'): int
     {
         // Check global mute
         if ($this->notificationService->isGloballyMuted($userId)) {

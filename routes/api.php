@@ -32,6 +32,10 @@ use App\Http\Controllers\CollegeController;
 use App\Http\Controllers\DegreeProgrammeController;
 use App\Http\Controllers\SessionController;
 use App\Http\Controllers\VideoController;
+use App\Http\Controllers\FileController;
+use App\Http\Controllers\AiTutorController;
+use App\Http\Controllers\EngagementController;
+use App\Http\Controllers\InstructorEngagementController;
 
 Route::prefix('v1')->group(function () {
 
@@ -128,6 +132,24 @@ Route::prefix('v1')->group(function () {
         Route::get('/sections/{id}/activities', [ActivityController::class, 'indexPublic']);
         Route::get('/activities/{id}', [ActivityController::class, 'showPublic']);
         Route::get('/activities/{id}/questions', [QuizController::class, 'index']);
+        Route::post('/activities/{id}/quiz-attempt', [QuizController::class, 'startAttempt']);
+        Route::get('/activities/{id}/lesson-pages', [LessonController::class, 'index']);
+        Route::post('/activities/{id}/complete', [ActivityController::class, 'complete']);
+        Route::get('/activities/{id}/discussions', [ForumController::class, 'discussions']);
+        Route::post('/activities/{id}/discussions', [ForumController::class, 'createDiscussion']);
+
+        // ─────────────────────────────────────────────────────────────────────
+        // AI TUTOR WIDGET (Authenticated students)
+        // ─────────────────────────────────────────────────────────────────────
+        Route::prefix('ai')->group(function () {
+            Route::get('/widget-context', [AiTutorController::class, 'widgetContext']);
+            Route::post('/ask',           [AiTutorController::class, 'ask']);
+            Route::post('/summarize',     [AiTutorController::class, 'summarize']);
+            Route::post('/resources',     [AiTutorController::class, 'resources']);
+            Route::post('/flashcards',    [AiTutorController::class, 'flashcards']);
+            Route::post('/debug',         [AiTutorController::class, 'debug']);
+            Route::post('/motivate',      [AiTutorController::class, 'motivate']);
+        });
 
         // ─────────────────────────────────────────────────────────────────────
         // COURSES & ENROLLMENT (Admin or Instructor)
@@ -150,7 +172,6 @@ Route::prefix('v1')->group(function () {
             Route::delete('/{id}/instructor',        [CourseController::class, 'removeInstructor']);
 
             // Sections (nested under course)
-            Route::get('/{id}/sections',                          [SectionController::class, 'index']);
             Route::post('/{id}/sections',                         [SectionController::class, 'store']);
             Route::put('/{id}/sections/{sectionId}',              [SectionController::class, 'update']);
             Route::delete('/{id}/sections/{sectionId}',           [SectionController::class, 'destroy']);
@@ -193,7 +214,6 @@ Route::prefix('v1')->group(function () {
         // SECTIONS → ACTIVITIES  (top-level section access)
         // ─────────────────────────────────────────────────────────────────────
         Route::middleware('admin.or.instructor')->prefix('sections/{id}')->group(function () {
-            Route::get('activities',  [ActivityController::class, 'index']);
             Route::post('activities', [ActivityController::class, 'store']);
         });
 
@@ -238,6 +258,10 @@ Route::prefix('v1')->group(function () {
             Route::post('/{id}/video-upload', [VideoController::class, 'upload']);
             Route::delete('/{id}/video',      [VideoController::class, 'destroy']);
 
+            // File upload
+            Route::post('/{id}/file-upload', [FileController::class, 'upload']);
+            Route::delete('/{id}/file',      [FileController::class, 'destroy']);
+
             // Feedback questions & responses
             Route::get('/{id}/feedback-questions',   [FeedbackController::class, 'questions']);
             Route::post('/{id}/feedback-questions',  [FeedbackController::class, 'storeQuestion']);
@@ -248,16 +272,11 @@ Route::prefix('v1')->group(function () {
             Route::get('/{id}/folder-files',  [FolderController::class, 'index']);
             Route::post('/{id}/folder-files', [FolderController::class, 'store']);
 
-            // Forum discussions
-            Route::get('/{id}/discussions',  [ForumController::class, 'discussions']);
-            Route::post('/{id}/discussions', [ForumController::class, 'createDiscussion']);
-
             // Glossary entries
             Route::get('/{id}/glossary-entries',  [GlossaryController::class, 'index']);
             Route::post('/{id}/glossary-entries', [GlossaryController::class, 'store']);
 
             // Lesson pages
-            Route::get('/{id}/lesson-pages',  [LessonController::class, 'index']);
             Route::post('/{id}/lesson-pages', [LessonController::class, 'store']);
 
             // SCORM tracks
@@ -318,6 +337,7 @@ Route::prefix('v1')->group(function () {
             Route::get('unread-count',          [NotificationController::class, 'unreadCount']);
             Route::post('read-all',             [NotificationController::class, 'markAllRead']);
             Route::patch('{id}/read',          [NotificationController::class, 'markRead']);
+            Route::patch('{id}/click',         [NotificationController::class, 'markClicked']);
             Route::delete('{id}',              [NotificationController::class, 'destroy']);
 
             // Preferences API
@@ -528,6 +548,18 @@ Route::middleware('auth:sanctum')->get('quiz-attempts/{id}',               [Quiz
 Route::middleware('auth:sanctum')->post('quiz-attempts/{id}/submit',      [QuizController::class, 'submitAttempt']);
 Route::middleware('auth:sanctum')->get('my-quiz-attempts',                 [QuizController::class, 'myAttempts']);
 
+// Proctoring
+Route::middleware('auth:sanctum')->prefix('proctoring')->group(function () {
+    Route::post('start',               [\App\Http\Controllers\ProctoringController::class, 'start']);
+    Route::post('violation',           [\App\Http\Controllers\ProctoringController::class, 'violation']);
+    Route::post('webcam-check',        [\App\Http\Controllers\ProctoringController::class, 'webcamCheck']);
+    Route::post('end',                 [\App\Http\Controllers\ProctoringController::class, 'end']);
+    Route::post('analyze-submission',  [\App\Http\Controllers\ProctoringController::class, 'analyzeSubmission']);
+    // Instructor-facing read endpoints
+    Route::get('instructor/courses/{courseId}/sessions', [\App\Http\Controllers\ProctoringController::class, 'instructorSessions']);
+    Route::get('instructor/sessions/{sessionId}',        [\App\Http\Controllers\ProctoringController::class, 'instructorSessionDetail']);
+});
+
 // Attendance logs
 Route::middleware('auth:sanctum')->prefix('attendance-sessions/{id}')->group(function () {
     Route::get('logs',       [AttendanceController::class, 'logs']);
@@ -629,9 +661,10 @@ Route::middleware('auth:sanctum')->prefix('profile')->group(function () {
     Route::post('image',       [ProfileController::class, 'uploadImage']);
     Route::delete('image',      [ProfileController::class, 'removeImage']);
     Route::post('instructor/image', [ProfileController::class, 'uploadInstructorImage']);
-    Route::get('preferences',  [ProfileController::class, 'preferences']);
-    Route::put('preferences',  [ProfileController::class, 'updatePreferences']);
-    Route::get('my-instructors', [ProfileController::class, 'myInstructors']);
+    Route::get('preferences',      [ProfileController::class, 'preferences']);
+    Route::put('preferences',      [ProfileController::class, 'updatePreferences']);
+    Route::put('learning-style',   [ProfileController::class, 'updateLearningStyle']);
+    Route::get('my-instructors',   [ProfileController::class, 'myInstructors']);
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -642,6 +675,56 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
     Route::get('{pollId}/results', [SessionController::class, 'getPollResults']);
     Route::post('{pollId}/end', [SessionController::class, 'endPoll']);
 });
+
+    // =========================================================================
+    // ENGAGEMENT TRACKING & SCORING
+    // =========================================================================
+    Route::middleware('auth:sanctum')->prefix('engagement')->group(function () {
+
+        // ── Event logging (student frontend calls these) ──────────────────
+        Route::post('events',          [EngagementController::class, 'logEvent']);
+        Route::post('session/open',    [EngagementController::class, 'openSession']);
+        Route::post('session/close',   [EngagementController::class, 'closeSession']);
+
+        // ── Material interaction tracking ─────────────────────────────────
+        Route::post('materials/{materialId}/interact', [EngagementController::class, 'recordMaterialInteraction']);
+
+        // ── Student self-service ──────────────────────────────────────────
+        Route::get('my-score',           [EngagementController::class, 'myScore']);
+        Route::get('streak',             [EngagementController::class, 'myStreak']);
+
+        // ── Learner dashboard (new) ────────────────────────────────────────
+        Route::get('my-dashboard',       [EngagementController::class, 'myDashboard']);
+        Route::get('my-login-history',   [EngagementController::class, 'myLoginHistory']);
+        Route::get('my-activity-log',    [EngagementController::class, 'myActivityLog']);
+        Route::get('my-recommendations', [EngagementController::class, 'myRecommendations']);
+    });
+
+    // ── Instructor engagement views ───────────────────────────────────────────
+    Route::middleware('auth:sanctum')->prefix('instructor')->group(function () {
+        Route::prefix('courses/{courseId}')->group(function () {
+            Route::get('engagement',         [InstructorEngagementController::class, 'courseOverview']);
+            Route::get('engagement/at-risk', [InstructorEngagementController::class, 'atRisk']);
+            Route::prefix('learners/{userId}')->group(function () {
+                Route::get('engagement',     [InstructorEngagementController::class, 'learnerDetail']);
+                Route::post('nudge',         [InstructorEngagementController::class, 'nudgeLearner']);
+            });
+        });
+    });
+
+    // ── Per-course engagement (instructor / admin) ────────────────────────
+    Route::middleware('auth:sanctum')->prefix('courses/{courseId}')->group(function () {
+        // Course-wide latest scores
+        Route::get('engagement', [EngagementController::class, 'courseScores']);
+
+        // Per-learner
+        Route::prefix('learners/{userId}')->group(function () {
+            Route::get('engagement',              [EngagementController::class, 'learnerScores']);
+            Route::post('engagement/compute',     [EngagementController::class, 'compute']);
+            Route::get('material-interactions',   [EngagementController::class, 'materialInteractions']);
+            Route::get('activity-events',         [EngagementController::class, 'activityEvents']);
+        });
+    });
 
 }); // Close Route::prefix('v1')
 

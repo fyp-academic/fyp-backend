@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\Conversation;
 use App\Models\Course;
 use App\Models\DegreeProgramme;
 use App\Models\User;
@@ -45,11 +46,19 @@ class ChatAccessController extends Controller
      */
     public function myChats(): JsonResponse
     {
+        /** @var User $user */
         $user = Auth::user();
 
-        // Direct conversations
-        $directChats = $user->allConversations()
-            ->where('type', 'direct')
+        // Direct conversations – query by owner/participant columns because
+        // direct chats are never added to the conversation_participants pivot.
+        // Also include null-type rows created before type was enforced.
+        $directChats = Conversation::where(function ($q) {
+                $q->where('type', 'direct')->orWhereNull('type');
+            })
+            ->where(function ($q) use ($user) {
+                $q->where('owner_user_id', $user->id)
+                  ->orWhere('participant_user_id', $user->id);
+            })
             ->with(['owner', 'participant'])
             ->orderBy('last_message_time', 'desc')
             ->get();

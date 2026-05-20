@@ -12,15 +12,18 @@ use App\Models\QuizAnswer;
 use App\Models\QuizAttempt;
 use App\Models\QuizAttemptResponse;
 use App\Models\Course;
+use App\Models\CognitiveSignal;
 use App\Services\NotificationService;
+use App\Services\EngagementComputationService;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 
 class QuizController extends Controller
 {
-    public function __construct(private NotificationService $notificationService)
-    {
-    }
+    public function __construct(
+        private NotificationService $notificationService,
+        private EngagementComputationService $engagement,
+    ) {}
 
     /**
      * GET /api/v1/activities/{id}/questions
@@ -43,12 +46,13 @@ class QuizController extends Controller
     public function store(Request $request, string $id): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'type'            => 'required|string|in:multiple_choice,true_false,matching,short_answer,numerical,essay,calculated,drag_drop',
-            'question_text'   => 'required|string',
-            'category'        => 'sometimes|string|max:255',
-            'default_mark'    => 'sometimes|numeric|min:0',
-            'shuffle_answers' => 'sometimes|boolean',
-            'penalty'         => 'sometimes|numeric|min:0|max:1',
+            'type'              => 'required|string|in:multiple_choice,true_false,matching,short_answer,numerical,essay,calculated,drag_drop',
+            'question_text'     => 'required|string',
+            'category'          => 'sometimes|string|max:255',
+            'default_mark'      => 'sometimes|numeric|min:0',
+            'shuffle_answers'   => 'sometimes|boolean',
+            'choice_numbering'  => 'sometimes|string|in:none,a,b,c,A,B,C,i,ii,iii,I,II,III,1,2,3',
+            'penalty'           => 'sometimes|numeric|min:0|max:1',
         ]);
 
         if ($validator->fails()) {
@@ -58,15 +62,16 @@ class QuizController extends Controller
         $activity = Activity::findOrFail($id);
 
         $question = QuizQuestion::create([
-            'id'              => Str::uuid()->toString(),
-            'activity_id'     => $id,
-            'course_id'       => $activity->course_id,
-            'type'            => $request->type,
-            'question_text'   => $request->question_text,
-            'category'        => $request->input('category', ''),
-            'default_mark'    => $request->input('default_mark', 1),
-            'shuffle_answers' => $request->input('shuffle_answers', true),
-            'penalty'         => $request->input('penalty', 0),
+            'id'               => Str::uuid()->toString(),
+            'activity_id'      => $id,
+            'course_id'        => $activity->course_id,
+            'type'             => $request->type,
+            'question_text'      => $request->question_text,
+            'category'         => $request->input('category', ''),
+            'default_mark'     => $request->input('default_mark', 1),
+            'shuffle_answers'  => $request->input('shuffle_answers', true),
+            'choice_numbering' => $request->input('choice_numbering', 'none'),
+            'penalty'          => $request->input('penalty', 0),
         ]);
 
         return response()->json(['message' => 'Question created.', 'data' => $question], 201);
@@ -81,12 +86,13 @@ class QuizController extends Controller
         $question = QuizQuestion::findOrFail($id);
 
         $validator = Validator::make($request->all(), [
-            'type'            => 'sometimes|string|in:multiple_choice,true_false,matching,short_answer,numerical,essay,calculated,drag_drop',
-            'question_text'   => 'sometimes|string',
-            'category'        => 'sometimes|string|max:255',
-            'default_mark'    => 'sometimes|numeric|min:0',
-            'shuffle_answers' => 'sometimes|boolean',
-            'penalty'         => 'sometimes|numeric|min:0|max:1',
+            'type'              => 'sometimes|string|in:multiple_choice,true_false,matching,short_answer,numerical,essay,calculated,drag_drop',
+            'question_text'     => 'sometimes|string',
+            'category'          => 'sometimes|string|max:255',
+            'default_mark'      => 'sometimes|numeric|min:0',
+            'shuffle_answers'   => 'sometimes|boolean',
+            'choice_numbering'  => 'sometimes|string|in:none,a,b,c,A,B,C,i,ii,iii,I,II,III,1,2,3',
+            'penalty'           => 'sometimes|numeric|min:0|max:1',
         ]);
 
         if ($validator->fails()) {
@@ -94,7 +100,7 @@ class QuizController extends Controller
         }
 
         $question->update($request->only([
-            'type', 'question_text', 'category', 'default_mark', 'shuffle_answers', 'penalty',
+            'type', 'question_text', 'category', 'default_mark', 'shuffle_answers', 'choice_numbering', 'penalty',
         ]));
 
         return response()->json(['message' => 'Question updated.', 'data' => $question]);
@@ -191,6 +197,20 @@ class QuizController extends Controller
                 'started_at' => now(),
             ]);
 
+            try {
+                $this->engagement->logEvent(
+                    userId:       $user->id,
+                    eventType:    'quiz_start',
+                    courseId:     $activity->course_id,
+                    resourceType: 'activity',
+                    resourceId:   $id,
+                    metadata:     ['attempt_id' => $attempt->id, 'attempt_number' => $attemptNumber],
+                    loginSessionId: $request->input('login_session_id'),
+                );
+            } catch (\Throwable $engEx) {
+                Log::warning('Engagement: failed to log quiz_start', ['activity' => $id, 'error' => $engEx->getMessage()]);
+            }
+
             return response()->json([
                 'message' => 'Quiz attempt started.',
                 'data' => $attempt,
@@ -286,6 +306,39 @@ class QuizController extends Controller
         $attempt->load('responses');
         $attempt->needs_grading = $needsGrading;
         $attempt->score_percentage = $percentage;
+
+        // Engagement: log quiz_submit event + update skip_rate in cognitive signals
+        try {
+            $totalQuestions  = QuizQuestion::where('activity_id', $attempt->activity_id)->count();
+            $answeredCount   = count($request->responses);
+            $skippedCount    = max(0, $totalQuestions - $answeredCount);
+            $skipRate        = $totalQuestions > 0 ? round(($skippedCount / $totalQuestions) * 100, 2) : 0;
+
+            $this->engagement->logEvent(
+                userId:       $user->id,
+                eventType:    'quiz_submit',
+                courseId:     $attempt->course_id,
+                resourceType: 'activity',
+                resourceId:   $attempt->activity_id,
+                value:        $percentage,
+                metadata:     [
+                    'attempt_id'    => $attempt->id,
+                    'score'         => $totalScore,
+                    'max_score'     => $maxScore,
+                    'skip_rate'     => $skipRate,
+                    'needs_grading' => $needsGrading,
+                ],
+                loginSessionId: $request->input('login_session_id'),
+            );
+
+            CognitiveSignal::where('learner_id', $user->id)
+                ->where('course_id', $attempt->course_id)
+                ->orderBy('week_number', 'desc')
+                ->limit(1)
+                ->update(['quiz_question_skip_rate' => $skipRate]);
+        } catch (\Throwable $e) {
+            Log::warning('Engagement: failed to log quiz_submit', ['attempt' => $attempt->id, 'error' => $e->getMessage()]);
+        }
 
         // Notify instructor of quiz submission
         try {

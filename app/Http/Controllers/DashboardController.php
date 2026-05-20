@@ -14,6 +14,10 @@ use App\Models\Activity;
 use App\Models\StudentGrade;
 use App\Models\Notification as NotificationModel;
 use App\Models\DashboardEngagement;
+use App\Models\LearnerLoginSession;
+use App\Models\LearnerActivityEvent;
+use App\Models\EngagementScore;
+use App\Models\LearningStreak;
 use App\Policies\RolePolicy;
 
 class DashboardController extends Controller
@@ -263,78 +267,144 @@ class DashboardController extends Controller
      */
     private function getStudentDashboard(User $user): JsonResponse
     {
-        // Get student's enrolled courses
+        // Enrollments + sections for completion counts
         $enrollments = Enrollment::where('user_id', $user->id)
-            ->with('course.sections.activities')
+            ->with('course.sections')
             ->get();
 
-        $enrolledCourses = $enrollments->map(fn ($e) => [
-            'course' => $e->course,
-            'role' => $e->role,
-            'progress' => $e->progress,
-            'enrolled_date' => $e->enrolled_date,
-        ]);
-
-        $overallProgress = $enrollments->count() > 0
-            ? round($enrollments->avg('progress'), 1)
-            : 0;
-
         $courseIds = $enrollments->pluck('course_id');
-        $upcomingDues = Activity::whereIn('course_id', $courseIds)
+
+        // ── Stats ──────────────────────────────────────────────────────────────
+        $enrolledCount = $enrollments->count();
+
+        $lessonsCompleted = StudentGrade::where('user_id', $user->id)
+            ->whereIn('status', ['graded', 'completed', 'submitted'])
+            ->count();
+
+        $pendingTasks = Activity::whereIn('course_id', $courseIds)
+            ->whereNotNull('due_date')
+            ->where('due_date', '>=', now())
+            ->whereIn('type', ['assignment', 'quiz', 'assessment'])
+            ->count();
+
+        // ── Risk signal from latest engagement score ───────────────────────────
+        $latestScore = EngagementScore::where('learner_id', $user->id)
+            ->orderByDesc('computed_at')
+            ->value('engagement_score');
+        $riskSignal = ($latestScore === null || $latestScore >= 40) ? 'active' : 'inactive';
+
+        // ── Streak ─────────────────────────────────────────────────────────────
+        $streakDays = LearningStreak::where('learner_id', $user->id)
+            ->max('current_streak_days') ?? 0;
+
+        // ── Weekly study hours (Mon–Sun, current week) ─────────────────────────
+        $days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+        $weekSessions = LearnerLoginSession::where('user_id', $user->id)
+            ->whereBetween('started_at', [now()->startOfWeek(), now()->endOfWeek()])
+            ->get(['started_at', 'duration_seconds']);
+
+        $hoursByDay = array_fill_keys($days, 0.0);
+        foreach ($weekSessions as $s) {
+            $d = $s->started_at->format('D');
+            if (isset($hoursByDay[$d])) {
+                $hoursByDay[$d] += $s->duration_seconds / 3600;
+            }
+        }
+        $weeklyStudyHours = array_map(
+            fn ($day) => ['day' => $day, 'hours' => round($hoursByDay[$day], 1)],
+            $days
+        );
+
+        // ── Recent activity (last 4 engagement events) ─────────────────────────
+        $events = LearnerActivityEvent::where('user_id', $user->id)
+            ->with('course:id,name,short_name')
+            ->orderByDesc('occurred_at')
+            ->take(4)
+            ->get();
+
+        $recentActivity = $events->map(fn ($e) => [
+            'id'     => $e->id,
+            'action' => ucfirst(str_replace('_', ' ', $e->event_type)),
+            'item'   => $e->resource_type ?? '',
+            'course' => $e->course?->short_name ?? $e->course?->name ?? '',
+            'time'   => $e->occurred_at->diffForHumans(),
+        ])->values();
+
+        // ── Upcoming deadlines ─────────────────────────────────────────────────
+        $rawDeadlines = Activity::whereIn('course_id', $courseIds)
             ->whereNotNull('due_date')
             ->where('due_date', '>=', now())
             ->orderBy('due_date')
-            ->limit(10)
+            ->limit(5)
             ->get(['id', 'name', 'type', 'due_date', 'course_id']);
 
+        $upcomingDeadlines = $rawDeadlines->map(fn ($a) => [
+            'id'     => $a->id,
+            'title'  => $a->name,
+            'type'   => $a->type,
+            'due'    => $a->due_date->format('M d, Y'),
+            'urgent' => $a->due_date->diffInDays(now()) <= 2,
+        ])->values();
+
+        // ── Notifications ──────────────────────────────────────────────────────
         $notifications = NotificationModel::where('user_id', $user->id)
             ->orderBy('created_at', 'desc')
             ->limit(5)
             ->get();
 
-        // Get student's degree programme info
-        $degreeProgramme = null;
-        if ($user->degree_programme_id) {
-            $degreeProgramme = DegreeProgramme::with('college')
-                ->find($user->degree_programme_id);
-        }
+        // ── Latest AI nudge from instructor ────────────────────────────────────
+        $latestNudge = NotificationModel::where('user_id', $user->id)
+            ->where('type', 'engagement_nudge')
+            ->orderBy('created_at', 'desc')
+            ->first();
 
-        // Available courses for enrollment (in student's programme)
-        $availableCourses = collect();
-        if ($user->degree_programme_id) {
-            $enrolledCourseIds = $enrollments->pluck('course_id')->toArray();
-            $availableCourses = Course::whereHas('degreeProgrammes', function ($q) use ($user) {
-                $q->where('degree_programmes.id', $user->degree_programme_id);
-            })
-            ->where('visibility', 'shown')
-            ->where('status', 'active')
-            ->whereNotIn('id', $enrolledCourseIds)
-            ->with(['instructor', 'category'])
-            ->limit(5)
-            ->get();
-        }
+        // ── Degree programme ───────────────────────────────────────────────────
+        $degreeProgramme = $user->degree_programme_id
+            ? DegreeProgramme::with('college')->find($user->degree_programme_id)
+            : null;
+
+        // Enrolled courses array (many pages rely on this as an array of objects)
+        $enrolledCoursesArr = $enrollments->map(fn ($e) => [
+            'course'        => $e->course,
+            'role'          => $e->role,
+            'progress'      => $e->progress,
+            'enrolled_date' => $e->enrolled_date,
+        ]);
 
         return response()->json([
-            'role' => 'student',
+            'role'               => 'student',
+            // Array form used by Lessons, Assignments, Quizzes, CourseProgress pages
+            'enrolled_courses'   => $enrolledCoursesArr,
+            // Numeric count used by Dashboard stats card
+            'enrolled_count'     => $enrolledCount,
+            'lessons_completed'  => $lessonsCompleted,
+            'pending_tasks'      => $pendingTasks,
+            'risk_signal'        => $riskSignal,
+            'streak_days'        => $streakDays,
+            'weekly_study_hours' => array_values($weeklyStudyHours),
+            'recent_activity'    => $recentActivity,
+            'upcoming_deadlines' => $upcomingDeadlines,
+            'ai_nudge'           => $latestNudge ? [
+                'id'         => $latestNudge->id,
+                'title'      => $latestNudge->title,
+                'body'       => $latestNudge->body,
+                'course_id'  => $latestNudge->data['course_id'] ?? null,
+                'sent_at'    => $latestNudge->created_at->diffForHumans(),
+                'read'       => (bool) $latestNudge->read_at,
+            ] : null,
+            'monthly_progress'   => [],
+            // Supporting data
             'stats' => [
-                'enrolled_courses' => $enrollments->count(),
-                'overall_progress' => $overallProgress,
-                'upcoming_activities' => $upcomingDues->count(),
+                'enrolled_courses'  => $enrolledCount,
+                'overall_progress'  => $enrollments->count() > 0 ? (int) round($enrollments->avg('progress')) : 0,
+                'upcoming_activities' => $rawDeadlines->count(),
             ],
-            'enrolled_courses' => $enrolledCourses,
-            'overall_progress' => $overallProgress,
-            'upcoming_due_dates' => $upcomingDues,
             'recent_notifications' => $notifications,
-            'degree_programme' => $degreeProgramme,
-            'available_courses' => $availableCourses,
+            'degree_programme'     => $degreeProgramme,
             'permissions' => [
-                'can_manage_colleges' => false,
-                'can_manage_degree_programmes' => false,
-                'can_manage_courses' => false,
-                'can_manage_categories' => false,
-                'can_manage_instructors' => false,
-                'can_manage_students' => false,
-                'can_self_enroll' => true,
+                'can_manage_colleges'    => false,
+                'can_manage_courses'     => false,
+                'can_self_enroll'        => true,
                 'can_view_own_data_only' => true,
             ],
         ]);

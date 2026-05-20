@@ -17,6 +17,8 @@ class BehavioralSignal extends Model
         'login_frequency', 'time_on_task_hours', 'content_completion_rate',
         'quiz_attempt_count', 'quiz_available_count', 'submission_timing',
         'forum_post_count', 'forum_posts_required', 'navigation_pattern',
+        'consecutive_active_days', 'avg_inactivity_gap_days', 'bounce_session_count',
+        'peak_hour_of_day', 'device_type_primary', 'material_open_count', 'avg_video_watch_percent',
         'normalised_values', 'colour_flags', 'raw_data', 'computed_at',
     ];
 

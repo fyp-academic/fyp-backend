@@ -17,6 +17,7 @@ class Notification extends Model
         'dedup_key',
         'status',
         'read_at',
+        'clicked_at',
         'sent_at',
         'failed_reason',
         'retry_count',
@@ -27,8 +28,9 @@ class Notification extends Model
         return [
             'payload' => 'array',
             'status' => 'string',
-            'read_at' => 'datetime',
-            'sent_at' => 'datetime',
+            'read_at'    => 'datetime',
+            'clicked_at' => 'datetime',
+            'sent_at'    => 'datetime',
         ];
     }
 

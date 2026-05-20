@@ -23,6 +23,9 @@ class SessionParticipant extends Model
         'hands_raised',
         'chat_messages',
         'attendance_score',
+        'join_punctuality_minutes',
+        'poll_responses_count',
+        'participation_duration_seconds',
     ];
 
     protected function casts(): array

@@ -13,8 +13,8 @@ class QuizQuestion extends Model
 
     protected $fillable = [
         'id', 'activity_id', 'course_id', 'type', 'question_text', 'category',
-        'default_mark', 'shuffle_answers', 'multiple_answers', 'correct_answer',
-        'penalty', 'hints', 'matching_pairs',
+        'default_mark', 'shuffle_answers', 'multiple_answers', 'choice_numbering',
+        'correct_answer', 'penalty', 'hints', 'matching_pairs',
     ];
 
     protected function casts(): array

@@ -57,24 +57,32 @@ return [
     |
     */
     'jitsi' => [
-        'domain' => env('JITSI_DOMAIN', 'meet.yourlms.com'),
+        'domain' => env('JITSI_DOMAIN', 'meet.codagenz.com'),
         'app_id' => env('JITSI_APP_ID', 'lms-production'),
         'app_secret' => env('JITSI_APP_SECRET', ''),
         'jibri_url' => env('JIBRI_URL', 'http://localhost:2222'),
     ],
 
+   
     /*
     |--------------------------------------------------------------------------
-    | OpenAI Configuration
+    | Gemini Configuration
     |--------------------------------------------------------------------------
-    |
-    | Configuration for OpenAI API integration (transcription & summarization).
-    |
     */
-    'openai' => [
-        'api_key' => env('OPENAI_API_KEY', ''),
-        'model' => env('OPENAI_MODEL', 'whisper-1'),
-        'summary_model' => env('OPENAI_SUMMARY_MODEL', 'gpt-4o'),
+    'gemini' => [
+        'api_key' => env('GEMINI_API_KEY', ''),
+        'model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
+        'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
+        'summary_model' => env('GEMINI_SUMMARY_MODEL', 'gemini-2.5-flash'),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | YouTube Data API v3 (for AI Tutor resource discovery)
+    |--------------------------------------------------------------------------
+    */
+    'youtube' => [
+        'api_key' => env('YOUTUBE_API_KEY', ''),
     ],
 
 ];

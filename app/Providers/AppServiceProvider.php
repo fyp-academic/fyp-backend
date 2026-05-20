@@ -2,6 +2,7 @@
 
 namespace App\Providers;
 
+use App\Services\GeminiService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\URL;
@@ -14,7 +15,9 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        $this->app->singleton(GeminiService::class, function () {
+            return new GeminiService();
+        });
     }
 
     /**

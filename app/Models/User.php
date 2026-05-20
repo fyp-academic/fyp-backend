@@ -42,6 +42,11 @@ class User extends Authenticatable
         'phone_number',
         'profile_image',
         'bio',
+        'vark_style',
+        'preferred_modes',
+        'pace_preference',
+        'declared_interests',
+        'support_notes',
         'department',
         'institution',
         'country',
@@ -72,7 +77,9 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'verification_code_expires_at' => 'datetime',
             'password_reset_expires_at' => 'datetime',
-            'password' => 'hashed',
+            'password'          => 'hashed',
+            'preferred_modes'   => 'array',
+            'declared_interests'=> 'array',
         ];
     }
 

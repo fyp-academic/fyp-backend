@@ -10,14 +10,18 @@ use Illuminate\Validation\Rule;
 use App\Models\Section;
 use App\Models\Activity;
 use App\Models\Enrollment;
+use App\Models\UserActivityCompletion;
 use App\Models\Notification;
 use App\Services\NotificationService;
+use App\Services\EngagementComputationService;
+use Illuminate\Support\Facades\Log;
 
 class ActivityController extends Controller
 {
-    public function __construct(private NotificationService $notificationService)
-    {
-    }
+    public function __construct(
+        private NotificationService $notificationService,
+        private EngagementComputationService $engagement,
+    ) {}
     /**
      * GET /api/v1/sections/{id}/activities
      * Return all activities within a section ordered by sort_order.
@@ -34,7 +38,7 @@ class ActivityController extends Controller
 
     /**
      * GET /api/v1/sections/{id}/activities (public)
-     * Return visible activities for enrolled students.
+     * Return activities for enrolled students, instructors, and admins.
      */
     public function indexPublic(Request $request, string $id): JsonResponse
     {
@@ -42,17 +46,18 @@ class ActivityController extends Controller
         $section = Section::findOrFail($id);
         $course = \App\Models\Course::findOrFail($section->course_id);
 
-        // Check if user is enrolled
-        $isEnrolled = \App\Models\Enrollment::where('user_id', $user?->id)
-            ->where('course_id', $section->course_id)
-            ->exists();
-
-        if (!$isEnrolled && $course->visibility !== 'shown') {
+        // Check access via RolePolicy (handles admin, instructor, student)
+        if (!\App\Policies\RolePolicy::canAccessCourse($user, $course)) {
             return response()->json(['message' => 'Access denied.'], 403);
         }
 
+        // Instructors and admins see everything; students see only visible items
+        $isAdminOrInstructor = \App\Policies\RolePolicy::isAdminOrInstructor($user);
+
         $activities = Activity::where('section_id', $id)
-            ->where('visible', true)
+            ->when(!$isAdminOrInstructor, function ($q) {
+                $q->where('visible', true);
+            })
             ->orderBy('sort_order')
             ->get();
 
@@ -83,6 +88,23 @@ class ActivityController extends Controller
         // Instructors and admins can view hidden activities; students cannot
         if (!$activity->visible && !\App\Policies\RolePolicy::canAccessCourse($user, $course)) {
             return response()->json(['message' => 'Activity not available.'], 403);
+        }
+
+        // Log content_view engagement event for students
+        try {
+            if ($user && $isEnrolled) {
+                $this->engagement->logEvent(
+                    userId:       $user->id,
+                    eventType:    'content_view',
+                    courseId:     $activity->course_id,
+                    resourceType: 'activity',
+                    resourceId:   $id,
+                    metadata:     ['activity_type' => $activity->type],
+                    loginSessionId: $request->input('login_session_id'),
+                );
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Engagement: failed to log content_view', ['activity' => $id, 'error' => $e->getMessage()]);
         }
 
         return response()->json(['data' => $activity]);
@@ -187,5 +209,69 @@ class ActivityController extends Controller
         $activity->delete();
 
         return response()->json(['message' => 'Activity deleted.']);
+    }
+
+    /**
+     * POST /api/v1/activities/{id}/complete
+     * Mark an activity as completed for the authenticated student.
+     */
+    public function complete(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $activity = Activity::findOrFail($id);
+        $course = \App\Models\Course::findOrFail($activity->course_id);
+
+        // Check enrollment
+        $enrollment = Enrollment::where('user_id', $user->id)
+            ->where('course_id', $activity->course_id)
+            ->first();
+
+        if (!$enrollment && !\App\Policies\RolePolicy::canAccessCourse($user, $course)) {
+            return response()->json(['message' => 'Access denied.'], 403);
+        }
+
+        $completionType = $request->input('completion_type', 'manual');
+
+        // Record per-user completion (upsert — idempotent)
+        UserActivityCompletion::updateOrCreate(
+            ['user_id' => $user->id, 'activity_id' => $activity->id],
+            [
+                'id'              => (string) \Illuminate\Support\Str::uuid(),
+                'course_id'       => $activity->course_id,
+                'completion_type' => $completionType,
+                'completed_at'    => now(),
+            ]
+        );
+
+        // Compute per-user progress for this course
+        $progress = UserActivityCompletion::progressFor($user->id, $activity->course_id);
+
+        // Persist updated progress on the enrollment record
+        if ($enrollment) {
+            $enrollment->progress    = $progress;
+            $enrollment->last_access = now();
+            $enrollment->save();
+        }
+
+        // Engagement: log completion event and touch learning streak
+        try {
+            $this->engagement->logEvent(
+                userId:       $user->id,
+                eventType:    'activity_complete',
+                courseId:     $activity->course_id,
+                resourceType: 'activity',
+                resourceId:   $id,
+                value:        $progress,
+                metadata:     ['activity_type' => $activity->type],
+                loginSessionId: $request->input('login_session_id'),
+            );
+        } catch (\Throwable $e) {
+            Log::warning('Engagement: failed to log activity_complete', ['activity' => $id, 'error' => $e->getMessage()]);
+        }
+
+        return response()->json([
+            'message' => 'Activity marked as completed.',
+            'progress' => $progress,
+        ]);
     }
 }

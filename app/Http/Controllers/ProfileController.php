@@ -250,6 +250,45 @@ class ProfileController extends Controller
     }
 
     /**
+     * PUT /api/v1/profile/learning-style
+     * Persist the learner's declared learning style, modes, pace, interests, and support notes.
+     */
+    public function updateLearningStyle(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'vark_style'         => 'nullable|string|in:visual,auditory,reading,kinesthetic',
+            'preferred_modes'    => 'nullable|array',
+            'preferred_modes.*'  => 'string',
+            'pace_preference'    => 'nullable|string|in:self-directed,guided,accelerated',
+            'declared_interests' => 'nullable|array',
+            'declared_interests.*' => 'string',
+            'support_notes'      => 'nullable|string|max:500',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $user = $request->user();
+        $user->fill($request->only([
+            'vark_style', 'preferred_modes', 'pace_preference',
+            'declared_interests', 'support_notes',
+        ]));
+        $user->save();
+
+        return response()->json([
+            'message' => 'Learning style saved.',
+            'data'    => [
+                'vark_style'         => $user->vark_style,
+                'preferred_modes'    => $user->preferred_modes,
+                'pace_preference'    => $user->pace_preference,
+                'declared_interests' => $user->declared_interests,
+                'support_notes'      => $user->support_notes,
+            ],
+        ]);
+    }
+
+    /**
      * GET /api/v1/profile/preferences
      * Retrieve all preference toggles for the user.
      */

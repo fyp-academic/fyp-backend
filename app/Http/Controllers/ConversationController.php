@@ -56,18 +56,23 @@ class ConversationController extends Controller
         })->first();
 
         if ($existing) {
-            return response()->json(['message' => 'Conversation already exists.', 'data' => $existing], 409);
+            return response()->json([
+                'message'      => 'Conversation already exists.',
+                'data'         => $existing,
+                'conversation' => $existing,
+            ], 409);
         }
 
         $conversation = Conversation::create([
             'id'                   => Str::uuid()->toString(),
+            'type'                 => 'direct',
             'owner_user_id'        => $user->id,
             'participant_user_id'  => $recipient->id,
             'participant_name'     => $recipient->name,
             'participant_role'     => $recipient->role ?? 'student',
             'last_message'         => $request->message,
             'last_message_time'    => now(),
-            'unread_count'         => 1,
+            'unread_count'         => 0,
         ]);
 
         Message::create([

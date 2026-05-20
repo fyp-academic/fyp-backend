@@ -14,7 +14,17 @@ class ForumPost extends Model
     protected $fillable = [
         'id', 'discussion_id', 'user_id', 'parent_id',
         'subject', 'content', 'attachment_path',
+        'likes_count', 'quality_score', 'sentiment', 'depth_level',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'likes_count'   => 'integer',
+            'quality_score' => 'float',
+            'depth_level'   => 'integer',
+        ];
+    }
 
     public function discussion(): BelongsTo
     {

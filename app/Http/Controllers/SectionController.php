@@ -9,6 +9,7 @@ use Illuminate\Support\Str;
 use App\Models\Course;
 use App\Models\Section;
 use App\Models\Enrollment;
+use App\Models\UserActivityCompletion;
 use App\Models\Notification;
 
 class SectionController extends Controller
@@ -30,29 +31,49 @@ class SectionController extends Controller
 
     /**
      * GET /api/v1/courses/{id}/sections (public)
-     * Return sections for enrolled students.
+     * Return sections for enrolled students, instructors, and admins.
      */
     public function indexPublic(Request $request, string $id): JsonResponse
     {
         $user = $request->user();
         $course = Course::findOrFail($id);
 
-        // Check if user is enrolled or course is visible
-        $isEnrolled = \App\Models\Enrollment::where('user_id', $user?->id)
-            ->where('course_id', $id)
-            ->exists();
-
-        if (!$isEnrolled && $course->visibility !== 'shown') {
+        // Check access via RolePolicy (handles admin, instructor, student)
+        if (!\App\Policies\RolePolicy::canAccessCourse($user, $course)) {
             return response()->json(['message' => 'Access denied. Enroll to view course content.'], 403);
         }
 
+        // Instructors and admins see everything; students see only visible items
+        $isAdminOrInstructor = \App\Policies\RolePolicy::isAdminOrInstructor($user);
+
         $sections = Section::where('course_id', $id)
-            ->where('visible', true)
-            ->with(['activities' => function($q) {
+            ->when(!$isAdminOrInstructor, function ($q) {
                 $q->where('visible', true);
+            })
+            ->with(['activities' => function($q) use ($isAdminOrInstructor) {
+                if (!$isAdminOrInstructor) {
+                    $q->where('visible', true);
+                }
+                $q->orderBy('sort_order');
             }])
             ->orderBy('sort_order')
             ->get();
+
+        // Inject per-user completion_status into each activity
+        if ($user) {
+            $completedIds = UserActivityCompletion::where('user_id', $user->id)
+                ->where('course_id', $id)
+                ->pluck('activity_id')
+                ->flip(); // keyed by activity_id for O(1) lookup
+
+            $sections->each(function ($section) use ($completedIds) {
+                $section->activities->each(function ($activity) use ($completedIds) {
+                    $activity->completion_status = $completedIds->has($activity->id)
+                        ? 'completed'
+                        : 'available';
+                });
+            });
+        }
 
         return response()->json(['data' => $sections, 'course_id' => $id]);
     }

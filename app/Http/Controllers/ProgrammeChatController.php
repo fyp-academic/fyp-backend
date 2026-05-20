@@ -240,13 +240,18 @@ class ProgrammeChatController extends Controller
             return true;
         }
 
-        // Instructors assigned to the programme
-        if ($programme->instructors()->where('instructor_id', $user->id)->exists()) {
+        // Instructors assigned to the programme (check pivot table directly)
+        if ($programme->instructors()->where('users.id', $user->id)->exists()) {
             return true;
         }
 
-        // Students in the programme
-        if ($user->degree_programme_id === $programme->id) {
+        // Students: check degree_programme_id field (with safe string cast) OR via relationship
+        if ((string) $user->degree_programme_id === (string) $programme->id) {
+            return true;
+        }
+
+        // Fallback: check via the HasMany students() relationship
+        if ($programme->students()->where('users.id', $user->id)->exists()) {
             return true;
         }
 

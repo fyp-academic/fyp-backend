@@ -8,9 +8,14 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use App\Models\Activity;
 use App\Models\AssignmentSubmission;
+use App\Models\CognitiveSignal;
+use App\Services\EngagementComputationService;
+use Illuminate\Support\Facades\Log;
 
 class AssignmentController extends Controller
 {
+    public function __construct(private EngagementComputationService $engagement) {}
+
     /**
      * GET /api/v1/activities/{id}/submissions
      * List all submissions for an assignment activity.
@@ -107,6 +112,32 @@ class AssignmentController extends Controller
             'attempt_number'  => $lastAttempt + 1,
             'late'            => $activity->due_date && now()->greaterThan($activity->due_date),
         ]);
+
+        // Engagement: log submission event and track revision count
+        try {
+            $this->engagement->logEvent(
+                userId:       $user->id,
+                eventType:    'activity_complete',
+                courseId:     $activity->course_id,
+                resourceType: 'activity',
+                resourceId:   $id,
+                metadata:     [
+                    'submission_id' => $submission->id,
+                    'attempt_number' => $lastAttempt + 1,
+                    'late' => $submission->late,
+                ],
+                loginSessionId: $request->input('login_session_id'),
+            );
+
+            // revision_count = how many prior attempts existed before this one
+            CognitiveSignal::where('learner_id', $user->id)
+                ->where('course_id', $activity->course_id)
+                ->orderBy('week_number', 'desc')
+                ->limit(1)
+                ->update(['assignment_revision_count' => $lastAttempt]);
+        } catch (\Throwable $e) {
+            Log::warning('Engagement: failed to log assignment submission', ['activity' => $id, 'error' => $e->getMessage()]);
+        }
 
         return response()->json(['message' => 'Submission created.', 'data' => $submission], 201);
     }
