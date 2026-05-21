@@ -8,12 +8,14 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use App\Models\Activity;
 use App\Models\LessonPage;
+use App\Models\LessonPageProgress;
+use Illuminate\Support\Facades\Auth;
 
 class LessonController extends Controller
 {
     /**
      * GET /api/v1/activities/{id}/lesson-pages
-     * List all pages in a lesson activity.
+     * List all pages in a lesson activity with user progress.
      */
     public function index(string $id): JsonResponse
     {
@@ -22,7 +24,61 @@ class LessonController extends Controller
             ->orderBy('sort_order')
             ->get();
 
+        $user = Auth::user();
+        if ($user) {
+            $progress = LessonPageProgress::where('user_id', $user->id)
+                ->where('activity_id', $id)
+                ->pluck('is_viewed', 'lesson_page_id')
+                ->toArray();
+
+            $pages = $pages->map(function ($page) use ($progress) {
+                $page->is_viewed = $progress[$page->id] ?? false;
+                return $page;
+            });
+        }
+
         return response()->json(['data' => $pages, 'activity_id' => $id]);
+    }
+
+    /**
+     * POST /api/v1/lesson-pages/{id}/viewed
+     * Mark a lesson page as viewed by the current user.
+     */
+    public function markViewed(string $id): JsonResponse
+    {
+        $page = LessonPage::findOrFail($id);
+        $user = Auth::user();
+
+        $progress = LessonPageProgress::firstOrCreate(
+            ['user_id' => $user->id, 'lesson_page_id' => $page->id],
+            [
+                'id' => Str::uuid()->toString(),
+                'activity_id' => $page->activity_id,
+                'is_viewed' => true,
+                'viewed_at' => now(),
+            ]
+        );
+
+        if (! $progress->is_viewed) {
+            $progress->update(['is_viewed' => true, 'viewed_at' => now()]);
+        }
+
+        // Check if all pages are viewed; if so, mark activity complete
+        $totalPages = LessonPage::where('activity_id', $page->activity_id)->count();
+        $viewedPages = LessonPageProgress::where('user_id', $user->id)
+            ->where('activity_id', $page->activity_id)
+            ->where('is_viewed', true)
+            ->count();
+
+        $allViewed = $viewedPages >= $totalPages && $totalPages > 0;
+
+        return response()->json([
+            'message' => 'Page marked as viewed.',
+            'is_viewed' => true,
+            'all_pages_viewed' => $allViewed,
+            'viewed_count' => $viewedPages,
+            'total_pages' => $totalPages,
+        ]);
     }
 
     /**

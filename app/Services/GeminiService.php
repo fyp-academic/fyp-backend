@@ -357,7 +357,7 @@ STUDENT PROFILE:
 - Days since last login: {$inactive}
 
 COURSE CONTENT SYLLABUS:
-- All course modules/topics: " . ($courseTopics ?: 'Not available') . "
+- All course modules/topics/lectures: " . ($courseTopics ?: 'Not available') . "
 - Topics/activities student has COMPLETED: " . ($completedTopics ?: 'None yet') . "
 - Topics/activities student has NOT yet completed: " . ($incompleteTopics ?: 'All done') . "
 
