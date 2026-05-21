@@ -60,9 +60,9 @@ class EngagementDemoSeeder extends Seeder
     private function resolveStudents(): void
     {
         $emails = [
-            'high'   => 'john.mwale@demo.udom.ac.tz',
-            'medium' => 'grace.njau@demo.udom.ac.tz',
-            'atrisk' => 'peter.masanja@demo.udom.ac.tz',
+            'high'   => 'john@demo.com',
+            'medium' => 'grace@demo.com',
+            'atrisk' => 'peter@demo.com',
         ];
         foreach ($emails as $key => $email) {
             $user = User::where('email', $email)->first();

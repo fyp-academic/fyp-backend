@@ -11,8 +11,8 @@ return new class extends Migration
     public function up(): void
     {
         Schema::create('instructors', function (Blueprint $table) {
-            $table->id();
-            $table->foreignId('user_id')->constrained()->onDelete('cascade');
+            $table->uuid('id')->primary();
+            $table->uuid('user_id')->foreign('user_id')->references('id')->on('users')->cascadeOnDelete();
 
             // Personal Information
             $table->string('full_name');
@@ -35,7 +35,7 @@ return new class extends Migration
                 'tutorial_assistant',
                 'graduate_assistant'
             ])->nullable();
-            $table->foreignId('college_id')->nullable()->constrained()->onDelete('set null');
+            $table->uuid('college_id')->nullable()->foreign('college_id')->references('id')->on('colleges')->nullOnDelete();
             $table->date('date_of_employment')->nullable();
 
             // Qualification Details
@@ -63,8 +63,8 @@ return new class extends Migration
         // Pivot table for instructor-degree programme assignments
         Schema::create('instructor_degree_programme', function (Blueprint $table) {
             $table->id();
-            $table->foreignId('instructor_id')->constrained()->onDelete('cascade');
-            $table->foreignId('degree_programme_id')->constrained()->onDelete('cascade');
+            $table->uuid('instructor_id')->foreign('instructor_id')->references('id')->on('instructors')->cascadeOnDelete();
+            $table->uuid('degree_programme_id')->foreign('degree_programme_id')->references('id')->on('degree_programmes')->cascadeOnDelete();
             $table->timestamps();
 
             $table->unique(['instructor_id', 'degree_programme_id']);
