@@ -41,7 +41,6 @@ jobs:
           source: "."
           target: "/var/www/fyp-backend"
           overwrite: true
-          rm: true
 
       - name: Run remote deploy script
         uses: appleboy/ssh-action@v1.0.3
