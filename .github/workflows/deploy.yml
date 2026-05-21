@@ -20,11 +20,6 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-dev --optimize-autoloader --no-interaction
 
-      - name: Install WebSocket dependencies
-        run: |
-          cd websocket
-          npm ci --production
-
       - name: Write production .env
         run: |
           echo "${{ secrets.LMS_ENV_PRODUCTION }}" > .env.production
@@ -64,7 +59,5 @@ jobs:
             php artisan route:cache
             php artisan view:cache
             php artisan event:cache
-            pm2 restart fyp-websocket || pm2 start websocket/ecosystem.config.js
-            pm2 save
             sudo supervisorctl restart fyp-reverb
             echo "Deployment finished at $(date)"
