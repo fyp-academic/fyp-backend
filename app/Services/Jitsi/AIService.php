@@ -4,6 +4,7 @@ namespace App\Services\Jitsi;
 
 use App\Models\Session;
 use App\Models\SessionTranscript;
+use App\Events\TranscriptCreated;
 use App\Services\GeminiService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -72,6 +73,14 @@ class AIService
                 'segments'  => [],
                 'timestamp' => $transcript->timestamp->toIso8601String(),
             ]);
+
+            broadcast(new TranscriptCreated(
+                $sessionId,
+                (string) $transcript->id,
+                $transcript->speaker_name,
+                $transcript->text,
+                $transcript->timestamp->toIso8601String(),
+            ));
 
             Log::info("Transcribed chunk for session {$sessionId}, user {$userId}");
 

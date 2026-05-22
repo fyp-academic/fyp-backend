@@ -297,12 +297,19 @@ class SessionController extends Controller
                 Log::warning('Engagement: failed to record join punctuality', ['session' => $id, 'error' => $engEx->getMessage()]);
             }
 
+            // Auto-grant transcription consent when joining
+            if ($session->ai_transcription) {
+                $consentKey = "transcription_consent:{$user->id}:{$id}";
+                cache()->put($consentKey, true, now()->addHours(8));
+            }
+
             return response()->json([
                 'token' => $tokenData['token'],
                 'room_name' => $tokenData['roomName'],
                 'is_moderator' => $tokenData['isModerator'],
                 'jitsi_domain' => $this->tokenService->getDomain(),
                 'config' => $tokenData['config'],
+                'ai_transcription' => $session->ai_transcription,
                 'user_info' => [
                     'id' => $user->id,
                     'name' => $user->name,
@@ -705,7 +712,7 @@ class SessionController extends Controller
 
         // Check for audio capture consent (must be explicitly granted)
         $consentKey = "transcription_consent:{$user->id}:{$request->session_id}";
-        if (!cache()->get($consentKey)) {
+        if (cache()->get($consentKey) !== true) {
             return response()->json([
                 'error' => 'Audio capture consent required',
                 'consent_required' => true,

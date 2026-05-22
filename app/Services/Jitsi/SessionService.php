@@ -57,7 +57,7 @@ class SessionService
             'screen_share_allowed' => $data['screen_share_allowed'] ?? true,
             'start_muted' => $data['start_muted'] ?? false,
             'start_video_off' => $data['start_video_off'] ?? false,
-            'ai_transcription' => $data['ai_transcription'] ?? false,
+            'ai_transcription' => $data['ai_transcription'] ?? true,
         ]);
 
         $session->save();

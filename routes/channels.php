@@ -74,6 +74,15 @@ Broadcast::channel('conversation.{conversationId}', function ($user, string $con
     return false;
 });
 
+Broadcast::channel('session.{sessionId}', function ($user, string $sessionId) {
+    $session = \App\Models\Session::find($sessionId);
+    if (!$session) return false;
+    if ($user->role === 'admin') return true;
+    if ($session->instructor_id === $user->id) return true;
+    if ($session->participants()->where('user_id', $user->id)->exists()) return true;
+    return false;
+});
+
 Broadcast::channel('online-users', function ($user) {
     // Update or create presence record
     UserPresence::updateOrCreate(
