@@ -20,18 +20,6 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-dev --optimize-autoloader --no-interaction
 
-      - name: Write production .env
-        run: |
-          echo "${{ secrets.LMS_ENV_PRODUCTION }}" > .env.production
-          cp .env.production .env
-
-      - name: Cache Laravel
-        run: |
-          php artisan config:cache
-          php artisan route:cache
-          php artisan view:cache
-          php artisan event:cache
-
       - name: Deploy to VPS via SCP
         uses: appleboy/scp-action@v0.1.7
         with:
@@ -50,7 +38,6 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
             cd /var/www/fyp-backend
-            cp .env.production .env
             php artisan migrate --force
             chmod -R 775 storage bootstrap/cache
             chown -R www-data:www-data storage bootstrap/cache
