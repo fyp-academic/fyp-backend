@@ -97,7 +97,7 @@ class SessionController extends Controller
                     [
                         'title' => 'New Live Session Scheduled',
                         'body' => "'{$session->title}' has been scheduled for {$session->scheduled_at->format('M d, Y at g:i A')}",
-                        'action_url' => route('student.sessions.show', $session->id),
+                        'action_url' => env('FRONTEND_STUDENT_URL', 'https://apesudom.codagenz.com') . '/sessions',
                         'session_id' => $session->id,
                         'course_id' => $session->course_id,
                         'scheduled_at' => $session->scheduled_at->toIso8601String(),
