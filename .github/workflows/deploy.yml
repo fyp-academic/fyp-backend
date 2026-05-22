@@ -40,6 +40,9 @@ jobs:
             cd /var/www/fyp-backend
             php artisan migrate --force
             chmod -R 775 storage bootstrap/cache
+            chown -R www-data:www-data storage/logs bootstrap/cache
+            rm -f storage/logs/laravel.log
+            php artisan config:clear
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
