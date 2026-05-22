@@ -4,25 +4,23 @@ namespace App\Services\Jitsi;
 
 use App\Models\Session;
 use App\Models\SessionTranscript;
+use App\Services\GeminiService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
-use OpenAI\Laravel\Facades\OpenAI;
 
 class AIService
 {
-    private string $model;
-    private string $summaryModel;
     private SocketBroadcaster $broadcaster;
+    private GeminiService $gemini;
 
     public function __construct()
     {
-        $this->model = config('services.openai.model', 'whisper-1');
-        $this->summaryModel = config('services.openai.summary_model', 'gpt-4o');
         $this->broadcaster = new SocketBroadcaster();
+        $this->gemini = new GeminiService();
     }
 
     /**
-     * Transcribe an audio chunk using OpenAI Whisper
+     * Transcribe an audio chunk using Gemini multimodal audio
      */
     public function transcribeChunk(string $audioPath, string $sessionId, string $userId): SessionTranscript
     {
@@ -30,37 +28,48 @@ class AIService
         $user = \App\Models\User::findOrFail($userId);
 
         try {
-            // Check if OpenAI client is available
-            if (!class_exists(\OpenAI\Client::class)) {
-                throw new \Exception('OpenAI client not installed. Run: composer require openai-php/client openai-php/laravel');
+            $audioData = base64_encode(file_get_contents($audioPath));
+            $mimeType = $this->detectAudioMimeType($audioPath);
+
+            $apiKey = config('services.gemini.api_key') ?? env('GEMINI_API_KEY', '');
+            $endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent";
+
+            $payload = [
+                'contents' => [[
+                    'parts' => [
+                        ['text' => 'Transcribe this audio exactly. Return only the spoken words, no commentary, no timestamps.'],
+                        ['inline_data' => ['mime_type' => $mimeType, 'data' => $audioData]],
+                    ],
+                ]],
+                'generationConfig' => ['temperature' => 0.0, 'maxOutputTokens' => 2048],
+            ];
+
+            $response = Http::timeout(30)->post("{$endpoint}?key={$apiKey}", $payload);
+
+            if ($response->failed()) {
+                throw new \Exception('Gemini transcription failed: ' . $response->status());
             }
 
-            $response = OpenAI::audio()->transcribe([
-                'model' => 'whisper-1',
-                'file' => fopen($audioPath, 'r'),
-                'language' => 'en',
-                'response_format' => 'verbose_json',
-                'timestamp_granularities' => ['segment'],
-            ]);
+            $text = trim($response->json('candidates.0.content.parts.0.text', ''));
 
-            $result = $response->toArray();
+            if (empty($text)) {
+                throw new \Exception('Empty transcription result');
+            }
 
-            // Save to database
             $transcript = SessionTranscript::create([
-                'session_id' => $sessionId,
-                'user_id' => $userId,
-                'text' => $result['text'],
-                'segments' => $result['segments'] ?? [],
+                'session_id'   => $sessionId,
+                'user_id'      => $userId,
+                'text'         => $text,
+                'segments'     => [],
                 'speaker_name' => $user->name,
-                'timestamp' => now(),
+                'timestamp'    => now(),
             ]);
 
-            // Broadcast via Socket.io
             $this->broadcaster->broadcastTranscript($sessionId, [
-                'id' => $transcript->id,
-                'speaker' => $transcript->speaker_name,
-                'text' => $transcript->text,
-                'segments' => $transcript->segments,
+                'id'        => $transcript->id,
+                'speaker'   => $transcript->speaker_name,
+                'text'      => $transcript->text,
+                'segments'  => [],
                 'timestamp' => $transcript->timestamp->toIso8601String(),
             ]);
 
@@ -75,13 +84,27 @@ class AIService
     }
 
     /**
-     * Generate AI summary of the session using GPT-4
+     * Detect MIME type for audio files
+     */
+    private function detectAudioMimeType(string $path): string
+    {
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        return match($ext) {
+            'webm'       => 'audio/webm',
+            'ogg'        => 'audio/ogg',
+            'mp3'        => 'audio/mpeg',
+            'wav'        => 'audio/wav',
+            'm4a', 'mp4' => 'audio/mp4',
+            default      => 'audio/webm',
+        };
+    }
+
+    /**
+     * Generate AI summary of the session using Gemini
      */
     public function summariseSession(string $sessionId): string
     {
         $session = Session::findOrFail($sessionId);
-
-        // Get all transcripts
         $transcripts = $session->transcripts;
 
         if ($transcripts->isEmpty()) {
@@ -89,40 +112,23 @@ class AIService
             return '';
         }
 
-        // Build full transcript text
         $fullText = $transcripts->map(fn ($t) => "[{$t->speaker_name}]: {$t->text}")->join("\n");
-
-        // Truncate if too long (GPT-4 has token limits)
-        $maxChars = 50000;
-        $truncatedText = strlen($fullText) > $maxChars ? substr($fullText, 0, $maxChars) . "\n[...truncated]" : $fullText;
+        $truncatedText = mb_substr($fullText, 0, 50000) . (strlen($fullText) > 50000 ? "\n[...truncated]" : '');
 
         try {
-            $response = OpenAI::chat()->create([
-                'model' => $this->summaryModel,
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'You are an LMS assistant. Summarise this lecture transcript. Output: 1) Key topics covered 2) Action items 3) Questions raised 4) Concepts to review. Be concise and student-focused.',
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $truncatedText,
-                    ],
-                ],
+            $system = 'You are an LMS assistant. Summarise this lecture transcript. '
+                . 'Output: 1) Key topics covered 2) Action items 3) Questions raised 4) Concepts to review. '
+                . 'Be concise and student-focused. Maximum 500 words.';
+
+            $summary = $this->gemini->generate($truncatedText, $system, [
                 'temperature' => 0.3,
-                'max_tokens' => 1000,
+                'max_tokens'  => 1000,
             ]);
 
-            $summary = $response->choices[0]->message->content;
-
-            // Save to session
             $session->update(['ai_summary' => $summary]);
-
-            // Send notifications
             $this->notifySummaryAvailable($session);
 
-            Log::info("Generated summary for session {$sessionId}");
-
+            Log::info("Generated Gemini summary for session {$sessionId}");
             return $summary;
 
         } catch (\Exception $e) {
@@ -132,37 +138,29 @@ class AIService
     }
 
     /**
-     * Answer a question using the session transcript as context
+     * Answer a question using the session transcript as context (Gemini)
      */
     public function answerQuestion(string $sessionId, string $question): string
     {
         $session = Session::findOrFail($sessionId);
 
-        // Get transcript context (last 8000 chars)
-        $fullText = $session->getFullTranscriptText();
-        $context = strlen($fullText) > 8000 ? '...' . substr($fullText, -8000) : $fullText;
+        $fullText = method_exists($session, 'getFullTranscriptText')
+            ? $session->getFullTranscriptText()
+            : $session->transcripts->map(fn ($t) => "[{$t->speaker_name}]: {$t->text}")->join("\n");
+
+        $context = mb_strlen($fullText) > 8000 ? '...' . mb_substr($fullText, -8000) : $fullText;
+
+        $system = "You are a live course AI assistant. A student is asking a question during or after a session. "
+            . "Answer helpfully and concisely based on the session transcript below. "
+            . "If the topic wasn't covered, say so and provide a brief general answer.\n\nSession transcript:\n{$context}";
 
         try {
-            $response = OpenAI::chat()->create([
-                'model' => 'gpt-4o-mini',
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => "You are a live course assistant. Answer based on what was discussed in the session. Context:\n{$context}",
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $question,
-                    ],
-                ],
-                'max_tokens' => 300,
+            return $this->gemini->generate($question, $system, [
                 'temperature' => 0.4,
+                'max_tokens'  => 400,
             ]);
-
-            return $response->choices[0]->message->content;
-
         } catch (\Exception $e) {
-            Log::error("Failed to answer question for session {$sessionId}: " . $e->getMessage());
+            Log::error("Gemini failed to answer question for session {$sessionId}: " . $e->getMessage());
             return 'Sorry, I was unable to process your question at this time.';
         }
     }
@@ -221,7 +219,7 @@ class AIService
     }
 
     /**
-     * Get engagement sentiment analysis from chat messages
+     * Get engagement sentiment analysis from chat messages (Gemini)
      */
     public function analyzeEngagement(array $chatMessages): array
     {
@@ -229,41 +227,27 @@ class AIService
             return ['sentiment' => 'neutral', 'engagement_score' => 50];
         }
 
-        $text = implode("\n", array_slice($chatMessages, -20)); // Last 20 messages
+        $text = implode("\n", array_slice($chatMessages, -20));
+
+        $system = 'Analyze the sentiment and engagement level of these chat messages from a live session. '
+            . 'Return ONLY a valid JSON object with keys: sentiment (positive/neutral/negative), '
+            . 'engagement_score (0-100), key_concerns (array of strings or empty). No markdown, no explanation.';
 
         try {
-            $response = OpenAI::chat()->create([
-                'model' => 'gpt-4o-mini',
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'Analyze the sentiment and engagement level of these chat messages from a live session. Return only a JSON object with keys: sentiment (positive/neutral/negative), engagement_score (0-100), key_concerns (array of strings or empty).',
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => $text,
-                    ],
-                ],
-                'temperature' => 0.3,
-                'max_tokens' => 200,
-            ]);
-
-            $content = $response->choices[0]->message->content;
-
-            // Try to parse JSON from response
-            if (preg_match('/\{.*\}/s', $content, $matches)) {
-                return json_decode($matches[0], true) ?? ['sentiment' => 'neutral', 'engagement_score' => 50];
+            $raw = $this->gemini->generate($text, $system, ['temperature' => 0.3, 'max_tokens' => 200]);
+            $raw = preg_replace('/```json\s*|\s*```/', '', $raw);
+            if (preg_match('/\{.*\}/s', $raw, $m)) {
+                return json_decode($m[0], true) ?? ['sentiment' => 'neutral', 'engagement_score' => 50];
             }
-
             return ['sentiment' => 'neutral', 'engagement_score' => 50];
         } catch (\Exception $e) {
-            Log::error('Engagement analysis failed', ['error' => $e->getMessage()]);
+            Log::error('Gemini engagement analysis failed', ['error' => $e->getMessage()]);
             return ['sentiment' => 'neutral', 'engagement_score' => 50];
         }
     }
 
     /**
-     * Generate quiz questions from session transcript using GPT-4o
+     * Generate quiz questions from session transcript using Gemini
      * Returns 5 multiple choice questions based on content
      */
     public function generateQuizFromTranscript(string $sessionId): array
@@ -275,58 +259,43 @@ class AIService
             throw new \Exception('No transcript available for quiz generation');
         }
 
-        // Build transcript text
         $fullText = $transcripts->map(fn ($t) => "[{$t->speaker_name}]: {$t->text}")->join("\n");
+        $truncatedText = mb_substr($fullText, 0, 10000) . (strlen($fullText) > 10000 ? "\n[...session continues...]" : '');
 
-        // Truncate if too long
-        $maxChars = 10000;
-        $truncatedText = strlen($fullText) > $maxChars
-            ? substr($fullText, 0, $maxChars) . "\n[...session continues...]"
-            : $fullText;
+        $system = 'Generate exactly 5 multiple choice questions based on the provided session transcript. '
+            . 'Return ONLY a valid JSON array (no markdown, no explanation) with objects containing: '
+            . 'question (string), options (array of 4 strings), correctAnswer (integer 0-3), explanation (string). '
+            . 'Start with [ and end with ].';
 
         try {
-            $response = OpenAI::chat()->create([
-                'model' => $this->summaryModel,
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'Generate exactly 5 multiple choice questions based on the provided session transcript. Return a JSON array with objects containing: question (string), options (array of 4 strings), correctAnswer (integer 0-3), explanation (string). Make questions test understanding of key concepts discussed.',
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => "Session: {$session->title}\n\nTranscript:\n{$truncatedText}",
-                    ],
-                ],
-                'temperature' => 0.7,
-                'max_tokens' => 2000,
-            ]);
+            $raw = $this->gemini->generate(
+                "Session: {$session->title}\n\nTranscript:\n{$truncatedText}",
+                $system,
+                ['temperature' => 0.7, 'max_tokens' => 2000]
+            );
 
-            $content = $response->choices[0]->message->content;
+            $raw = preg_replace('/```json\s*|\s*```/', '', $raw);
 
-            // Extract JSON from response
-            if (preg_match('/\[.*\]/s', $content, $matches)) {
-                $questions = json_decode($matches[0], true);
-                
-                if (!is_array($questions) || count($questions) !== 5) {
+            if (preg_match('/\[.*\]/s', $raw, $m)) {
+                $questions = json_decode($m[0], true);
+
+                if (!is_array($questions) || count($questions) < 1) {
                     throw new \Exception('Invalid quiz format generated');
                 }
 
                 $quizId = 'quiz_' . substr($sessionId, 0, 8) . '_' . time();
 
-                // Store quiz in database (would create Quiz model)
-                // For now, return the generated quiz
-
                 return [
-                    'quiz_id' => $quizId,
-                    'session_id' => $sessionId,
-                    'title' => "Quiz: {$session->title}",
-                    'questions' => $questions,
+                    'quiz_id'      => $quizId,
+                    'session_id'   => $sessionId,
+                    'title'        => "Quiz: {$session->title}",
+                    'questions'    => $questions,
                     'generated_at' => now()->toIso8601String(),
-                    'url' => "/quizzes/{$quizId}",
+                    'url'          => "/quizzes/{$quizId}",
                 ];
             }
 
-            throw new \Exception('Failed to parse quiz questions from AI response');
+            throw new \Exception('Failed to parse quiz questions from Gemini response');
 
         } catch (\Exception $e) {
             Log::error("Failed to generate quiz for session {$sessionId}: " . $e->getMessage());

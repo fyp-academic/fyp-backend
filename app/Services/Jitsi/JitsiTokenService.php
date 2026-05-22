@@ -33,28 +33,25 @@ class JitsiTokenService
 
         $context = [
             'user' => [
-                'id' => (string) $user['id'],
-                'name' => $user['name'],
-                'email' => $user['email'] ?? '',
-                'avatar' => $user['avatar'] ?? '',
-                'moderator' => $isModerator,
+                'id'          => (string) $user['id'],
+                'name'        => $user['name'],
+                'email'       => $user['email'] ?? '',
+                'avatar'      => $user['avatar'] ?? '',
+                'moderator'   => $isModerator ? 'true' : 'false',
                 'affiliation' => $isModerator ? 'owner' : 'member',
-            ],
-            'room' => [
-                'regex' => false,
             ],
         ];
 
         if ($isModerator) {
             $context['features'] = [
-                'recording' => true,
-                'livestreaming' => true,
+                'recording'      => 'true',
+                'livestreaming'  => 'true',
             ];
         }
 
         $payload = [
             'context' => $context,
-            'aud' => $this->appId,
+            'aud' => 'jitsi',
             'iss' => $this->appId,
             'sub' => $this->domain,
             'room' => $roomName,
@@ -75,22 +72,18 @@ class JitsiTokenService
         $payload = [
             'context' => [
                 'user' => [
-                    'id' => 'admin',
-                    'name' => 'System Admin',
-                    'email' => 'admin@system.local',
-                    'avatar' => '',
-                    'moderator' => true,
-                    'observer' => true,
-                ],
-                'room' => [
-                    'regex' => false,
+                    'id'        => 'admin',
+                    'name'      => 'System Admin',
+                    'email'     => 'admin@system.local',
+                    'avatar'    => '',
+                    'moderator' => 'true',
                 ],
                 'features' => [
-                    'recording' => true,
-                    'livestreaming' => true,
+                    'recording'     => 'true',
+                    'livestreaming' => 'true',
                 ],
             ],
-            'aud' => $this->appId,
+            'aud' => 'jitsi',
             'iss' => $this->appId,
             'sub' => $this->domain,
             'room' => $roomName,

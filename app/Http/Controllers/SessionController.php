@@ -783,10 +783,6 @@ class SessionController extends Controller
 
         $this->authorizeSessionAccess($user, $session);
 
-        if (!$session->ai_transcription) {
-            return response()->json(['error' => 'AI assistant not enabled for this session'], 400);
-        }
-
         try {
             $answer = $this->aiService->answerQuestion($id, $request->question);
 
