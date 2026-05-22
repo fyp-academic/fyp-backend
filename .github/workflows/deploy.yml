@@ -20,31 +20,41 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-dev --optimize-autoloader --no-interaction
 
-      - name: Deploy to VPS via SCP
+      - name: Deploy to temp directory via SCP
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           source: "."
-          target: "/var/www/fyp-backend"
+          target: "/tmp/fyp-backend-deploy"
           overwrite: true
 
-      - name: Run remote deploy script
+      - name: Sync to live and run post-deploy
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
+            # Sync code from temp to live, excluding server-managed dirs
+            rsync -a --delete \
+              --exclude=storage \
+              --exclude=bootstrap/cache \
+              --exclude=.env \
+              --exclude=database/*.sqlite \
+              --exclude=.git \
+              /tmp/fyp-backend-deploy/ /var/www/fyp-backend/
+
             cd /var/www/fyp-backend
             php artisan migrate --force
             chmod -R 775 storage bootstrap/cache
-            chown -R www-data:www-data storage/logs bootstrap/cache
+            chown -R www-data:www-data storage bootstrap/cache
             rm -f storage/logs/laravel.log
             php artisan config:clear
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
             php artisan event:cache
+            rm -rf /tmp/fyp-backend-deploy
             echo "Deployment finished at $(date)"
