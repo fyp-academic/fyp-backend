@@ -83,6 +83,10 @@ class SessionService
             throw new \Exception('Only the session instructor can start the session');
         }
 
+        if ($session->isLive()) {
+            return $session->fresh();
+        }
+
         if (!$session->isScheduled()) {
             throw new \Exception('Session cannot be started - current status: ' . $session->status);
         }
