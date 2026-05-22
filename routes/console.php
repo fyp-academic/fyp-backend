@@ -10,3 +10,6 @@ Artisan::command('inspire', function () {
 
 // Notification digest scheduler - runs every hour
 Schedule::command('notifications:send-digests')->hourly();
+
+// Auto-start and auto-end sessions based on scheduled time + duration
+Schedule::command('sessions:update-statuses')->everyMinute();

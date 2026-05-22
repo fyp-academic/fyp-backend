@@ -64,6 +64,7 @@ class SessionController extends Controller
             'title' => 'required|string|max:255',
             'course_id' => 'required|string|exists:courses,id',
             'scheduled_at' => 'required|date|after:now',
+            'duration' => 'nullable|integer|min:15|max:480',
             'max_participants' => 'nullable|integer|min:2|max:500',
             'password' => 'nullable|string|max:50',
             'recording_enabled' => 'nullable|boolean',

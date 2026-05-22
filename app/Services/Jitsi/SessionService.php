@@ -48,6 +48,7 @@ class SessionService
             'room_id' => '', // temporary, will update after creation
             'status' => 'scheduled',
             'scheduled_at' => $data['scheduled_at'],
+            'duration' => $data['duration'] ?? 60,
             'max_participants' => $data['max_participants'] ?? 100,
             'password' => $data['password'] ?? null,
             'recording_enabled' => $data['recording_enabled'] ?? false,
@@ -158,24 +159,37 @@ class SessionService
     {
         $now = now();
 
-        // 1. End live sessions that have passed their scheduled end time
+        // 1. End live sessions whose scheduled end time has passed
+        //    End time = started_at + duration (respects instructor's planned duration)
         $staleLive = Session::where('status', 'live')
-            ->whereNotNull('scheduled_at')
+            ->whereNotNull('started_at')
             ->whereNotNull('duration')
+            ->with('participants')
             ->get()
             ->filter(fn (Session $s) => $now->greaterThan(
-                $s->scheduled_at->copy()->addMinutes($s->duration)
+                $s->started_at->copy()->addMinutes($s->duration)
             ));
 
         foreach ($staleLive as $session) {
+            // Update participants: set left_at and recalculate attendance
+            foreach ($session->participants as $participant) {
+                if (is_null($participant->left_at)) {
+                    $participant->update(['left_at' => $now]);
+                }
+                $participant->updateAttendanceScore();
+            }
+
+            // Preserve original planned duration (don't overwrite with elapsed time)
             $session->update([
-                'status' => 'ended',
+                'status'   => 'ended',
                 'ended_at' => $now,
             ]);
-            Log::info("Auto-ended session {$session->id} (past scheduled end time)");
+
+            $this->broadcaster->broadcastSessionEnded($session->id);
+            Log::info("Auto-ended session {$session->id} (reached scheduled end time)");
         }
 
-        // 2. Auto-start scheduled sessions that are within their time window
+        // 2. Auto-start scheduled sessions at their scheduled_at time
         $readyScheduled = Session::where('status', 'scheduled')
             ->whereNotNull('scheduled_at')
             ->whereNotNull('duration')
@@ -187,13 +201,15 @@ class SessionService
 
         foreach ($readyScheduled as $session) {
             $session->update([
-                'status' => 'live',
-                'started_at' => $now,
+                'status'     => 'live',
+                'started_at' => $session->scheduled_at, // start exactly at scheduled time
             ]);
-            Log::info("Auto-started session {$session->id} (scheduled time reached)");
+
+            $this->broadcaster->broadcastSessionStarted($session->id);
+            Log::info("Auto-started session {$session->id} at scheduled time");
         }
 
-        // 3. Mark scheduled sessions whose entire window has passed as ended
+        // 3. Mark scheduled sessions whose entire window has passed as ended (never started)
         $expiredScheduled = Session::where('status', 'scheduled')
             ->whereNotNull('scheduled_at')
             ->whereNotNull('duration')
@@ -204,7 +220,7 @@ class SessionService
 
         foreach ($expiredScheduled as $session) {
             $session->update([
-                'status' => 'ended',
+                'status'   => 'ended',
                 'ended_at' => $now,
             ]);
             Log::info("Auto-ended session {$session->id} (never started, window passed)");
