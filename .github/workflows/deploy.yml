@@ -29,6 +29,13 @@ jobs:
           source: "."
           target: "/var/www/fyp-backend"
           overwrite: true
+          exclude: |
+            storage/**
+            bootstrap/cache/**
+            .env
+            .env.production
+            database/*.sqlite
+            database/*.sqlite3
 
       - name: Run remote deploy script
         uses: appleboy/ssh-action@v1.0.3
