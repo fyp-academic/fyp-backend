@@ -20,22 +20,27 @@ jobs:
       - name: Install PHP dependencies
         run: composer install --no-dev --optimize-autoloader --no-interaction
 
-      - name: Deploy to VPS via SCP
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            cd /var/www
+            sudo rm -rf fyp-backend-new
+            sudo mkdir -p fyp-backend-new
+            sudo chown $(whoami):$(whoami) fyp-backend-new
+
+      - name: Upload code to temp directory
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           source: "."
-          target: "/var/www/fyp-backend"
+          target: "/var/www/fyp-backend-new"
           overwrite: true
-          exclude: |
-            storage/**
-            bootstrap/cache/**
-            .env
-            .env.production
-            database/*.sqlite
-            database/*.sqlite3
 
       - name: Run remote deploy script
         uses: appleboy/ssh-action@v1.0.3
@@ -44,10 +49,23 @@ jobs:
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
           script: |
-            cd /var/www/fyp-backend
-            php artisan migrate --force
+            cd /var/www
+            # Preserve server files
+            sudo cp fyp-backend/.env fyp-backend-new/.env 2>/dev/null || true
+            sudo cp fyp-backend/.env.production fyp-backend-new/.env.production 2>/dev/null || true
+            sudo cp -r fyp-backend/storage fyp-backend-new/storage 2>/dev/null || true
+            sudo cp -r fyp-backend/bootstrap/cache fyp-backend-new/bootstrap/cache 2>/dev/null || true
+            sudo cp fyp-backend/database/*.sqlite* fyp-backend-new/database/ 2>/dev/null || true
+            # Swap directories
+            sudo mv fyp-backend fyp-backend-old
+            sudo mv fyp-backend-new fyp-backend
+            sudo rm -rf fyp-backend-old
+            cd fyp-backend
             sudo chmod -R 775 storage bootstrap/cache
-            sudo chown -R www-data:www-data storage bootstrap/cache
+            sudo chown -R www-data:www-data storage bootstrap/cache database
+            sudo chmod 664 database/database.sqlite 2>/dev/null || true
+            sudo chown www-data:www-data database/database.sqlite 2>/dev/null || true
+            php artisan migrate --force
             sudo -u www-data php artisan config:cache
             sudo -u www-data php artisan route:cache
             sudo -u www-data php artisan view:cache
