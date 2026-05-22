@@ -14,9 +14,9 @@ class JitsiTokenService
 
     public function __construct()
     {
-        $this->appId = config('services.jitsi.app_id', env('JITSI_APP_ID', 'lms-production'));
-        $this->appSecret = config('services.jitsi.app_secret', env('JITSI_APP_SECRET'));
-        $this->domain = config('services.jitsi.domain', env('JITSI_DOMAIN', 'meet.codagenz.com'));
+        $this->appId = (string) config('services.jitsi.app_id', env('JITSI_APP_ID', 'lms-production'));
+        $this->appSecret = (string) config('services.jitsi.app_secret', env('JITSI_APP_SECRET'));
+        $this->domain = (string) config('services.jitsi.domain', env('JITSI_DOMAIN', 'meet.codagenz.com'));
     }
 
     /**
