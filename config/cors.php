@@ -27,6 +27,7 @@ return [
         'http://localhost:5174',
         'http://localhost:8080',
         'https://apesguide.codagenz.com',
+        'https://apesudom.codagenz.com',
         'https://api.codagenz.com',
     ],
 
