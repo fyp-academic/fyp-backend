@@ -29,6 +29,7 @@ return [
         'https://apesguide.codagenz.com',
         'https://apesudom.codagenz.com',
         'https://api.codagenz.com',
+        'https://*.vercel.app',
     ],
 
     'allowed_origins_patterns' => [],
