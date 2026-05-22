@@ -115,7 +115,7 @@ class DashboardController extends Controller
 
         // Notifications
         $notifications = NotificationModel::where('user_id', $user->id)
-            ->orderByRaw("CASE WHEN read = false THEN 0 ELSE 1 END")
+            ->orderByRaw("CASE WHEN read_at IS NULL THEN 0 ELSE 1 END")
             ->orderBy('created_at', 'desc')
             ->limit(5)
             ->get();
@@ -229,7 +229,7 @@ class DashboardController extends Controller
 
         // Notifications
         $notifications = NotificationModel::where('user_id', $user->id)
-            ->orderByRaw("CASE WHEN read = false THEN 0 ELSE 1 END")
+            ->orderByRaw("CASE WHEN read_at IS NULL THEN 0 ELSE 1 END")
             ->orderBy('created_at', 'desc')
             ->limit(5)
             ->get();
