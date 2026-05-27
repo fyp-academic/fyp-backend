@@ -601,6 +601,7 @@ Route::middleware('auth:sanctum')->patch('glossary-entries/{id}/approve',  [Glos
 Route::middleware('auth:sanctum')->delete('glossary-entries/{id}',         [GlossaryController::class, 'destroy']);
 
 // Lesson pages
+Route::middleware('auth:sanctum')->post('lesson-pages/media-upload', [LessonController::class, 'mediaUpload']);
 Route::middleware('auth:sanctum')->put('lesson-pages/{id}',    [LessonController::class, 'update']);
 Route::middleware('auth:sanctum')->post('lesson-pages/{id}/viewed', [LessonController::class, 'markViewed']);
 Route::middleware('auth:sanctum')->delete('lesson-pages/{id}', [LessonController::class, 'destroy']);

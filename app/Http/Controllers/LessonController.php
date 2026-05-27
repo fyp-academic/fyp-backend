@@ -14,6 +14,38 @@ use Illuminate\Support\Facades\Auth;
 class LessonController extends Controller
 {
     /**
+     * POST /api/v1/lesson-pages/media-upload
+     * Upload an image or video to embed inside lesson page content.
+     * Returns a publicly accessible URL for use in HTML content.
+     */
+    public function mediaUpload(Request $request): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'file' => 'required|file|mimes:jpeg,jpg,png,gif,webp,svg,mp4,webm,ogg,mov,mkv|max:102400',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $file     = $request->file('file');
+        $mimeType = $file->getMimeType() ?? '';
+        $isVideo  = str_starts_with($mimeType, 'video/');
+        $folder   = $isVideo ? 'lesson-media/videos' : 'lesson-media/images';
+
+        $path = $file->store($folder, 'public');
+
+        return response()->json([
+            'message' => 'Media uploaded successfully.',
+            'data' => [
+                'url'       => asset('storage/' . $path),
+                'mime_type' => $mimeType,
+                'is_video'  => $isVideo,
+            ],
+        ]);
+    }
+
+    /**
      * GET /api/v1/activities/{id}/lesson-pages
      * List all pages in a lesson activity with user progress.
      */
