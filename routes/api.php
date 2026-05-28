@@ -736,6 +736,7 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
     // ─────────────────────────────────────────────────────────────────────
     Route::middleware('auth:sanctum')->prefix('student')->group(function () {
         Route::get('my-profile', [AdaptiveContentController::class, 'myProfile']);
+        Route::get('content-chunks/{contentId}', [AdaptiveContentController::class, 'chunks']);
         Route::get('content/{chunkId}', [AdaptiveContentController::class, 'show']);
         Route::post('adaptation/{adaptationId}/feedback', [AdaptiveContentController::class, 'feedback']);
         Route::post('{studentId}/recalculate-profile', [AdaptiveContentController::class, 'recalculateProfile']);

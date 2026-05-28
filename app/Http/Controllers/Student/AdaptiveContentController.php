@@ -27,6 +27,26 @@ class AdaptiveContentController extends Controller
     ) {}
 
     /**
+     * GET /api/student/content-chunks/{contentId}
+     */
+    public function chunks(string $contentId): JsonResponse
+    {
+        $student = Auth::user();
+        if (! $student) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        $chunks = ContentChunk::where('content_id', $contentId)
+            ->orderBy('chunk_index')
+            ->get(['id', 'chunk_index', 'chunk_text', 'chunk_type']);
+
+        return response()->json([
+            'content_id' => $contentId,
+            'chunks' => $chunks,
+        ]);
+    }
+
+    /**
      * GET /api/student/content/{chunkId}
      */
     public function show(string $chunkId, Request $request): JsonResponse
