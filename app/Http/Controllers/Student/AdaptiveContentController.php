@@ -118,7 +118,7 @@ class AdaptiveContentController extends Controller
                 'is_personalized' => false,
                 'original_text' => $chunk->chunk_text,
                 'profile' => $profileArray,
-                'settings_applied' => $settingsArray ?? null,
+                'settings_applied' => null,
                 'flagged_reason' => 'Instructor flagged this adaptation',
             ]);
         }
@@ -126,8 +126,13 @@ class AdaptiveContentController extends Controller
         // Build cache key
         $cacheKey = "adapt:{$student->id}:{$chunkId}:{$profileHash}";
 
-        // Check Redis cache
-        $cached = Cache::store('redis')->get($cacheKey);
+        // Check Redis cache (gracefully degrade if Redis is unavailable)
+        $cached = null;
+        try {
+            $cached = Cache::store('redis')->get($cacheKey);
+        } catch (\Throwable $e) {
+            Log::warning('Redis cache get failed', ['error' => $e->getMessage()]);
+        }
         if ($cached) {
             return response()->json([
                 'adapted_text' => $cached,
@@ -136,7 +141,7 @@ class AdaptiveContentController extends Controller
                 'is_personalized' => true,
                 'original_text' => $chunk->chunk_text,
                 'profile' => $profileArray,
-                'settings_applied' => $settingsArray ?? null,
+                'settings_applied' => null,
             ]);
         }
 
@@ -188,7 +193,7 @@ class AdaptiveContentController extends Controller
                 'is_personalized' => false,
                 'original_text' => $chunk->chunk_text,
                 'profile' => $profileArray,
-                'settings_applied' => $settingsArray ?? null,
+                'settings_applied' => $settingsArray,
                 'fallback_reason' => 'Gemini adaptation failed',
             ]);
         }

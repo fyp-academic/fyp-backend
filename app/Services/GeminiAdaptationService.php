@@ -8,10 +8,14 @@ use Illuminate\Support\Facades\Log;
 class GeminiAdaptationService
 {
     private string $apiKey;
+    private string $model;
+    private string $baseUrl;
 
     public function __construct()
     {
-        $this->apiKey = config('services.gemini.api_key') ?? '';
+        $this->apiKey = (string) (config('services.gemini.api_key') ?? '');
+        $this->model = (string) (config('services.gemini.model') ?? 'gemini-2.5-flash');
+        $this->baseUrl = rtrim((string) (config('services.gemini.base_url') ?? 'https://generativelanguage.googleapis.com/v1beta'), '/');
     }
 
     public function adapt(string $originalText, array $studentProfile, array $instructorSettings): ?string
@@ -42,9 +46,10 @@ class GeminiAdaptationService
         ];
 
         try {
-            $response = Http::withHeaders([
+            $url = "{$this->baseUrl}/models/{$this->model}:generateContent?key={$this->apiKey}";
+            $response = Http::timeout(30)->withHeaders([
                 'Content-Type' => 'application/json',
-            ])->post("https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={$this->apiKey}", $payload);
+            ])->post($url, $payload);
 
             if ($response->failed()) {
                 Log::error('Gemini adaptation API error', [
