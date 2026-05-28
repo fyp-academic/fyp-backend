@@ -249,6 +249,14 @@ class QuizController extends Controller
             return response()->json(['error' => 'Unauthorized'], 403);
         }
 
+        // Prevent duplicate submission
+        if ($attempt->status === 'submitted') {
+            return response()->json([
+                'message' => 'This quiz attempt has already been submitted.',
+                'data' => $attempt,
+            ], 422);
+        }
+
         $validator = Validator::make($request->all(), [
             'responses' => 'required|array',
             'responses.*.question_id' => 'required|string|exists:quiz_questions,id',
@@ -257,6 +265,12 @@ class QuizController extends Controller
         ]);
 
         if ($validator->fails()) {
+            Log::warning('Quiz submit validation failed', [
+                'attempt_id' => $id,
+                'student_id' => $user->id,
+                'errors' => $validator->errors()->toArray(),
+                'input' => $request->all(),
+            ]);
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
