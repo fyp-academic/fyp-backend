@@ -36,6 +36,13 @@ class QuizController extends Controller
             ->with('answers')
             ->get();
 
+        Log::info('Quiz questions fetched', [
+            'activity_id' => $id,
+            'activity_name' => $activity->name,
+            'question_count' => $questions->count(),
+            'question_ids' => $questions->pluck('id')->toArray(),
+        ]);
+
         return response()->json(['data' => $questions, 'activity_id' => $id]);
     }
 
@@ -45,17 +52,25 @@ class QuizController extends Controller
      */
     public function store(Request $request, string $id): JsonResponse
     {
+        $allowedTypes = 'multiple_choice,true_false,matching,short_answer,numerical,essay,calculated,drag_drop,drag_drop_text,drag_drop_markers,calculated_multichoice,calculated_simple';
         $validator = Validator::make($request->all(), [
-            'type'              => 'required|string|in:multiple_choice,true_false,matching,short_answer,numerical,essay,calculated,drag_drop',
+            'type'              => 'required|string|in:' . $allowedTypes,
             'question_text'     => 'required|string',
             'category'          => 'sometimes|string|max:255',
             'default_mark'      => 'sometimes|numeric|min:0',
             'shuffle_answers'   => 'sometimes|boolean',
             'choice_numbering'  => 'sometimes|string|in:none,a,b,c,A,B,C,i,ii,iii,I,II,III,1,2,3',
             'penalty'           => 'sometimes|numeric|min:0|max:1',
+            'matching_pairs'    => 'sometimes|nullable|array',
+            'correct_answer'    => 'sometimes|nullable|string',
         ]);
 
         if ($validator->fails()) {
+            Log::warning('Quiz question creation validation failed', [
+                'activity_id' => $id,
+                'errors' => $validator->errors()->toArray(),
+                'input' => $request->all(),
+            ]);
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
@@ -66,12 +81,34 @@ class QuizController extends Controller
             'activity_id'      => $id,
             'course_id'        => $activity->course_id,
             'type'             => $request->type,
-            'question_text'      => $request->question_text,
+            'question_text'    => $request->question_text,
             'category'         => $request->input('category', ''),
             'default_mark'     => $request->input('default_mark', 1),
             'shuffle_answers'  => $request->input('shuffle_answers', true),
             'choice_numbering' => $request->input('choice_numbering', 'none'),
             'penalty'          => $request->input('penalty', 0),
+            'matching_pairs'   => $request->input('matching_pairs'),
+            'correct_answer'   => $request->input('correct_answer'),
+        ]);
+
+        // Auto-generate True/False answers if not provided
+        if ($question->type === 'true_false' && $request->has('answers')) {
+            foreach ($request->answers as $a) {
+                QuizAnswer::create([
+                    'id'             => Str::uuid()->toString(),
+                    'question_id'    => $question->id,
+                    'text'           => $a['answer_text'] ?? $a['text'] ?? '',
+                    'grade_fraction' => $a['grade_fraction'] ?? $a['grade'] ?? 0,
+                    'feedback'       => $a['feedback'] ?? '',
+                    'sort_order'     => $a['sort_order'] ?? 0,
+                ]);
+            }
+        }
+
+        Log::info('Quiz question created', [
+            'activity_id' => $id,
+            'question_id' => $question->id,
+            'type' => $question->type,
         ]);
 
         return response()->json(['message' => 'Question created.', 'data' => $question], 201);
@@ -84,15 +121,18 @@ class QuizController extends Controller
     public function updateQuestion(Request $request, string $id): JsonResponse
     {
         $question = QuizQuestion::findOrFail($id);
+        $allowedTypes = 'multiple_choice,true_false,matching,short_answer,numerical,essay,calculated,drag_drop,drag_drop_text,drag_drop_markers,calculated_multichoice,calculated_simple';
 
         $validator = Validator::make($request->all(), [
-            'type'              => 'sometimes|string|in:multiple_choice,true_false,matching,short_answer,numerical,essay,calculated,drag_drop',
+            'type'              => 'sometimes|string|in:' . $allowedTypes,
             'question_text'     => 'sometimes|string',
             'category'          => 'sometimes|string|max:255',
             'default_mark'      => 'sometimes|numeric|min:0',
             'shuffle_answers'   => 'sometimes|boolean',
             'choice_numbering'  => 'sometimes|string|in:none,a,b,c,A,B,C,i,ii,iii,I,II,III,1,2,3',
             'penalty'           => 'sometimes|numeric|min:0|max:1',
+            'matching_pairs'    => 'sometimes|nullable|array',
+            'correct_answer'    => 'sometimes|nullable|string',
         ]);
 
         if ($validator->fails()) {
@@ -100,7 +140,7 @@ class QuizController extends Controller
         }
 
         $question->update($request->only([
-            'type', 'question_text', 'category', 'default_mark', 'shuffle_answers', 'choice_numbering', 'penalty',
+            'type', 'question_text', 'category', 'default_mark', 'shuffle_answers', 'choice_numbering', 'penalty', 'matching_pairs', 'correct_answer',
         ]));
 
         return response()->json(['message' => 'Question updated.', 'data' => $question]);
