@@ -55,11 +55,11 @@ class QuizController extends Controller
         $allowedTypes = 'multiple_choice,true_false,matching,short_answer,numerical,essay,calculated,drag_drop,drag_drop_text,drag_drop_markers,calculated_multichoice,calculated_simple';
         $validator = Validator::make($request->all(), [
             'type'              => 'required|string|in:' . $allowedTypes,
-            'question_text'     => 'required|string',
+            'question_text'     => 'required|string|min:1',
             'category'          => 'sometimes|string|max:255',
             'default_mark'      => 'sometimes|numeric|min:0',
             'shuffle_answers'   => 'sometimes|boolean',
-            'choice_numbering'  => 'sometimes|string|in:none,a,b,c,A,B,C,i,ii,iii,I,II,III,1,2,3',
+            'choice_numbering'  => 'sometimes|string|in:none,a,b,c,A,B,C,i,ii,iii,I,II,III,1,2,3,a,b,c...,A,B,C...,i,ii,iii...,I,II,III...,1,2,3...',
             'penalty'           => 'sometimes|numeric|min:0|max:1',
             'matching_pairs'    => 'sometimes|nullable|array',
             'correct_answer'    => 'sometimes|nullable|string',
@@ -71,7 +71,10 @@ class QuizController extends Controller
                 'errors' => $validator->errors()->toArray(),
                 'input' => $request->all(),
             ]);
-            return response()->json(['errors' => $validator->errors()], 422);
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors' => $validator->errors(),
+            ], 422);
         }
 
         $activity = Activity::findOrFail($id);
@@ -125,18 +128,21 @@ class QuizController extends Controller
 
         $validator = Validator::make($request->all(), [
             'type'              => 'sometimes|string|in:' . $allowedTypes,
-            'question_text'     => 'sometimes|string',
+            'question_text'     => 'sometimes|string|min:1',
             'category'          => 'sometimes|string|max:255',
             'default_mark'      => 'sometimes|numeric|min:0',
             'shuffle_answers'   => 'sometimes|boolean',
-            'choice_numbering'  => 'sometimes|string|in:none,a,b,c,A,B,C,i,ii,iii,I,II,III,1,2,3',
+            'choice_numbering'  => 'sometimes|string|in:none,a,b,c,A,B,C,i,ii,iii,I,II,III,1,2,3,a,b,c...,A,B,C...,i,ii,iii...,I,II,III...,1,2,3...',
             'penalty'           => 'sometimes|numeric|min:0|max:1',
             'matching_pairs'    => 'sometimes|nullable|array',
             'correct_answer'    => 'sometimes|nullable|string',
         ]);
 
         if ($validator->fails()) {
-            return response()->json(['errors' => $validator->errors()], 422);
+            return response()->json([
+                'message' => 'Validation failed.',
+                'errors' => $validator->errors(),
+            ], 422);
         }
 
         $question->update($request->only([
