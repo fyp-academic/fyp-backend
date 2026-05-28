@@ -69,6 +69,8 @@ class AdaptiveContentController extends Controller
                 'cached' => false,
                 'is_personalized' => false,
                 'original_text' => $chunk->chunk_text,
+                'profile' => null,
+                'settings_applied' => null,
             ]);
         }
 
@@ -115,6 +117,9 @@ class AdaptiveContentController extends Controller
                 'cached' => false,
                 'is_personalized' => false,
                 'original_text' => $chunk->chunk_text,
+                'profile' => $profileArray,
+                'settings_applied' => $settingsArray ?? null,
+                'flagged_reason' => 'Instructor flagged this adaptation',
             ]);
         }
 
@@ -130,6 +135,8 @@ class AdaptiveContentController extends Controller
                 'cached' => true,
                 'is_personalized' => true,
                 'original_text' => $chunk->chunk_text,
+                'profile' => $profileArray,
+                'settings_applied' => $settingsArray ?? null,
             ]);
         }
 
@@ -180,6 +187,9 @@ class AdaptiveContentController extends Controller
                 'cached' => false,
                 'is_personalized' => false,
                 'original_text' => $chunk->chunk_text,
+                'profile' => $profileArray,
+                'settings_applied' => $settingsArray ?? null,
+                'fallback_reason' => 'Gemini adaptation failed',
             ]);
         }
 
@@ -208,6 +218,8 @@ class AdaptiveContentController extends Controller
             'cached' => false,
             'is_personalized' => true,
             'original_text' => $chunk->chunk_text,
+            'profile' => $profileArray,
+            'settings_applied' => $settingsArray,
         ]);
     }
 
