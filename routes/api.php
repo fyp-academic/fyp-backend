@@ -35,7 +35,9 @@ use App\Http\Controllers\VideoController;
 use App\Http\Controllers\FileController;
 use App\Http\Controllers\AiTutorController;
 use App\Http\Controllers\EngagementController;
+use App\Http\Controllers\InstructorAdaptationController;
 use App\Http\Controllers\InstructorEngagementController;
+use App\Http\Controllers\Student\AdaptiveContentController;
 
 Route::prefix('v1')->group(function () {
 
@@ -727,6 +729,28 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
             Route::get('material-interactions',   [EngagementController::class, 'materialInteractions']);
             Route::get('activity-events',         [EngagementController::class, 'activityEvents']);
         });
+    });
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ADAPTIVE CONTENT PERSONALIZATION (Student)
+    // ─────────────────────────────────────────────────────────────────────
+    Route::middleware('auth:sanctum')->prefix('student')->group(function () {
+        Route::get('my-profile', [AdaptiveContentController::class, 'myProfile']);
+        Route::get('content/{chunkId}', [AdaptiveContentController::class, 'show']);
+        Route::post('adaptation/{adaptationId}/feedback', [AdaptiveContentController::class, 'feedback']);
+        Route::post('{studentId}/recalculate-profile', [AdaptiveContentController::class, 'recalculateProfile']);
+    });
+
+    // ─────────────────────────────────────────────────────────────────────
+    // ADAPTIVE CONTENT PERSONALIZATION (Instructor)
+    // ─────────────────────────────────────────────────────────────────────
+    Route::middleware('auth:sanctum')->prefix('instructor')->group(function () {
+        Route::get('settings/{courseId}/{topicId}', [InstructorAdaptationController::class, 'getSettings']);
+        Route::put('settings/{courseId}/{topicId}', [InstructorAdaptationController::class, 'updateSettings']);
+        Route::get('adaptations', [InstructorAdaptationController::class, 'auditLog']);
+        Route::post('adaptations/{adaptationId}/flag', [InstructorAdaptationController::class, 'flag']);
+        Route::post('adaptations/{adaptationId}/unflag', [InstructorAdaptationController::class, 'unflag']);
+        Route::get('students/{studentId}/profile', [InstructorAdaptationController::class, 'studentProfile']);
     });
 
 }); // Close Route::prefix('v1')

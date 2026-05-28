@@ -9,6 +9,7 @@ use Illuminate\Support\Str;
 use App\Models\Activity;
 use App\Models\LessonPage;
 use App\Models\LessonPageProgress;
+use App\Jobs\ChunkContentJob;
 use Illuminate\Support\Facades\Auth;
 
 class LessonController extends Controller
@@ -144,6 +145,8 @@ class LessonController extends Controller
             'jumps'       => $request->input('jumps'),
         ]);
 
+        ChunkContentJob::dispatch($page->id, $page->content, $page->page_type);
+
         return response()->json(['message' => 'Page created.', 'data' => $page], 201);
     }
 
@@ -168,6 +171,10 @@ class LessonController extends Controller
         }
 
         $page->update($request->only(['title', 'content', 'page_type', 'sort_order', 'jumps']));
+
+        if ($request->has('content')) {
+            ChunkContentJob::dispatch($page->id, $page->content, $page->page_type);
+        }
 
         return response()->json(['message' => 'Page updated.', 'data' => $page]);
     }
