@@ -3,13 +3,21 @@
 namespace App\Http\Controllers;
 
 use App\Models\Activity;
+use App\Models\ContentChunk;
+use App\Models\CourseMaterial;
+use App\Services\ActivityMaterialService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 
 class VideoController extends Controller
 {
+    public function __construct(
+        private ActivityMaterialService $materialService,
+    ) {}
+
     /**
      * POST /api/v1/activities/{id}/video-upload
      * Upload a video file for a video activity.
@@ -48,6 +56,16 @@ class VideoController extends Controller
         $activity->settings = $settings;
         $activity->save();
 
+        $this->materialService->syncFromUpload(
+            $activity,
+            $path,
+            $fileName,
+            $file->getMimeType(),
+            (int) $file->getSize(),
+            'video',
+            Auth::id(),
+        );
+
         return response()->json([
             'message' => 'Video uploaded successfully.',
             'data' => [
@@ -78,6 +96,12 @@ class VideoController extends Controller
         if ($videoPath) {
             Storage::disk('public')->delete($videoPath);
         }
+
+        $materialIds = CourseMaterial::where('activity_id', $activity->id)->pluck('id');
+        ContentChunk::where('content_source', 'course_material')
+            ->whereIn('content_id', $materialIds)
+            ->delete();
+        CourseMaterial::where('activity_id', $activity->id)->delete();
 
         unset($settings['videoPath'], $settings['videoUrl'], $settings['fileName'], $settings['mimeType'], $settings['fileSize']);
         $activity->settings = $settings;

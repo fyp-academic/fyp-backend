@@ -20,20 +20,34 @@ class ChunkContentJob implements ShouldQueue
         private string $contentId,
         private string $contentText,
         private string $contentType = 'lecture',
+        private string $contentSource = 'lesson_page',
     ) {}
 
     public function handle(ContentChunkingService $chunkingService): void
     {
+        if (trim($this->contentText) === '') {
+            Log::info('Content chunking skipped — empty text', ['content_id' => $this->contentId]);
+
+            return;
+        }
+
         try {
-            $chunkIds = $chunkingService->chunk($this->contentId, $this->contentText, $this->contentType);
+            $chunkIds = $chunkingService->chunk(
+                $this->contentId,
+                $this->contentText,
+                $this->contentType,
+                $this->contentSource,
+            );
 
             Log::info('Content chunked successfully', [
                 'content_id' => $this->contentId,
+                'content_source' => $this->contentSource,
                 'chunks_created' => count($chunkIds),
             ]);
         } catch (\Throwable $e) {
             Log::error('Content chunking failed', [
                 'content_id' => $this->contentId,
+                'content_source' => $this->contentSource,
                 'error' => $e->getMessage(),
             ]);
             throw $e;
@@ -44,6 +58,7 @@ class ChunkContentJob implements ShouldQueue
     {
         Log::error('ChunkContentJob permanently failed', [
             'content_id' => $this->contentId,
+            'content_source' => $this->contentSource,
             'error' => $exception->getMessage(),
         ]);
     }

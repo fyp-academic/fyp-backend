@@ -145,7 +145,7 @@ class LessonController extends Controller
             'jumps'       => $request->input('jumps'),
         ]);
 
-        ChunkContentJob::dispatch($page->id, $page->content, $page->page_type);
+        ChunkContentJob::dispatch($page->id, $page->content, $page->page_type ?? 'content', 'lesson_page');
 
         return response()->json(['message' => 'Page created.', 'data' => $page], 201);
     }
@@ -173,7 +173,7 @@ class LessonController extends Controller
         $page->update($request->only(['title', 'content', 'page_type', 'sort_order', 'jumps']));
 
         if ($request->has('content')) {
-            ChunkContentJob::dispatch($page->id, $page->content, $page->page_type);
+            ChunkContentJob::dispatch($page->id, $page->content, $page->page_type ?? 'content', 'lesson_page');
         }
 
         return response()->json(['message' => 'Page updated.', 'data' => $page]);

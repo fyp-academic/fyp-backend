@@ -24,7 +24,7 @@ class ChunkExistingContent extends Command
                 return self::FAILURE;
             }
 
-            ChunkContentJob::dispatch($page->id, $page->content, 'lecture');
+            ChunkContentJob::dispatch($page->id, $page->content, 'lecture', 'lesson_page');
             $this->info("Dispatched ChunkContentJob for page {$page->id}.");
             return self::SUCCESS;
         }
@@ -38,7 +38,7 @@ class ChunkExistingContent extends Command
         $bar = $this->output->createProgressBar($pages->count());
 
         foreach ($pages as $page) {
-            ChunkContentJob::dispatch($page->id, $page->content, 'lecture');
+            ChunkContentJob::dispatch($page->id, $page->content, 'lecture', 'lesson_page');
             $bar->advance();
         }
 

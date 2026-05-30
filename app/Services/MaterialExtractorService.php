@@ -21,7 +21,7 @@ class MaterialExtractorService
     {
         try {
             $parser = new PdfParser();
-            $pdf    = $parser->parseFile(storage_path("app/{$path}"));
+            $pdf    = $parser->parseFile($this->resolveStoragePath($path));
             $text   = $pdf->getText();
 
             return $this->truncate($text);
@@ -36,7 +36,7 @@ class MaterialExtractorService
     public function extractPptx(string $path): string
     {
         try {
-            $presentation = IOFactory::load(storage_path("app/{$path}"));
+            $presentation = IOFactory::load($this->resolveStoragePath($path));
             $text         = '';
 
             foreach ($presentation->getAllSlides() as $i => $slide) {
@@ -70,7 +70,7 @@ class MaterialExtractorService
             $zip     = new \ZipArchive();
             $tmpPath = sys_get_temp_dir() . '/h5p_' . uniqid();
 
-            if ($zip->open(storage_path("app/{$path}")) !== true) {
+            if ($zip->open($this->resolveStoragePath($path)) !== true) {
                 return '';
             }
 
@@ -103,7 +103,7 @@ class MaterialExtractorService
             $zip     = new \ZipArchive();
             $tmpPath = sys_get_temp_dir() . '/scorm_' . uniqid();
 
-            if ($zip->open(storage_path("app/{$path}")) !== true) {
+            if ($zip->open($this->resolveStoragePath($path)) !== true) {
                 return '';
             }
 
@@ -124,6 +124,32 @@ class MaterialExtractorService
             return $this->truncate($text);
         } catch (\Throwable $e) {
             Log::warning('SCORM extraction failed', ['path' => $path, 'error' => $e->getMessage()]);
+            return '';
+        }
+    }
+
+    // ── Word DOCX ────────────────────────────────────────────────────
+
+    public function extractDocx(string $path): string
+    {
+        try {
+            $zip = new \ZipArchive();
+            if ($zip->open($this->resolveStoragePath($path)) !== true) {
+                return '';
+            }
+
+            $xml = $zip->getFromName('word/document.xml');
+            $zip->close();
+
+            if ($xml === false) {
+                return '';
+            }
+
+            $text = strip_tags(str_replace(['</w:p>', '<w:tab/>'], ["\n", ' '], $xml));
+
+            return $this->truncate($text);
+        } catch (\Throwable $e) {
+            Log::warning('DOCX extraction failed', ['path' => $path, 'error' => $e->getMessage()]);
             return '';
         }
     }
@@ -244,5 +270,18 @@ class MaterialExtractorService
     {
         $text = preg_replace('/\s+/', ' ', trim($text));
         return substr($text, 0, self::MAX_CHARS);
+    }
+
+    private function resolveStoragePath(string $path): string
+    {
+        if (str_starts_with($path, 'public/')) {
+            return storage_path('app/'.$path);
+        }
+
+        if (str_starts_with($path, 'files/') || str_starts_with($path, 'videos/')) {
+            return storage_path('app/public/'.$path);
+        }
+
+        return storage_path('app/'.$path);
     }
 }

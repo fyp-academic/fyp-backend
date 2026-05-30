@@ -4,11 +4,14 @@ namespace App\Http\Controllers\Student;
 
 use App\Http\Controllers\Controller;
 use App\Jobs\RecalculateProfileJob;
+use App\Models\Activity;
 use App\Models\AdaptationLog;
 use App\Models\AdaptationSetting;
 use App\Models\ContentChunk;
 use App\Models\StudentProfile;
 use App\Models\User;
+use App\Services\AdaptableContentResolver;
+use App\Services\ActivityMaterialService;
 use App\Services\AdaptationIntegrityService;
 use App\Services\GeminiAdaptationService;
 use App\Services\PersonalizationContextService;
@@ -30,25 +33,99 @@ class AdaptiveContentController extends Controller
         private PersonalizationContextService $contextService,
         private PresentationAdaptationService $presentationService,
         private AdaptationIntegrityService $integrityService,
+        private AdaptableContentResolver $contentResolver,
+        private ActivityMaterialService $materialService,
     ) {}
 
     /**
      * GET /api/student/content-chunks/{contentId}
      */
-    public function chunks(string $contentId): JsonResponse
+    public function chunks(string $contentId, Request $request): JsonResponse
     {
         $student = Auth::user();
         if (! $student) {
             return response()->json(['message' => 'Unauthenticated.'], 401);
         }
 
+        $source = $request->query('source', 'lesson_page');
         $chunks = ContentChunk::where('content_id', $contentId)
+            ->where('content_source', $source)
             ->orderBy('chunk_index')
-            ->get(['id', 'chunk_index', 'chunk_text', 'chunk_type']);
+            ->get(['id', 'chunk_index', 'chunk_text', 'chunk_type', 'content_source']);
 
         return response()->json([
             'content_id' => $contentId,
+            'content_source' => $source,
             'chunks' => $chunks,
+        ]);
+    }
+
+    /**
+     * GET /api/v1/student/activities/{activityId}/adaptive-chunks
+     */
+    public function activityChunks(string $activityId): JsonResponse
+    {
+        $student = Auth::user();
+        if (! $student) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        $activity = Activity::find($activityId);
+        if (! $activity) {
+            return response()->json(['message' => 'Activity not found.'], 404);
+        }
+
+        $result = $this->contentResolver->chunksForActivity($activity);
+
+        return response()->json([
+            'activity_id' => $activityId,
+            'activity_type' => $activity->type,
+            'status' => $result['status'],
+            'material' => $result['material'] ? [
+                'id' => $result['material']->id,
+                'type' => $result['material']->type,
+                'processing_status' => $result['material']->processing_status,
+                'word_count' => $result['material']->word_count,
+                'has_extracted_text' => $result['material']->hasExtractedText(),
+            ] : null,
+            'chunks' => $result['chunks'],
+        ]);
+    }
+
+    /**
+     * POST /api/v1/student/activities/{activityId}/prepare-adaptation
+     * Lazy-sync legacy uploads into course_materials and queue extraction.
+     */
+    public function prepareActivity(string $activityId): JsonResponse
+    {
+        $student = Auth::user();
+        if (! $student) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        $activity = Activity::find($activityId);
+        if (! $activity) {
+            return response()->json(['message' => 'Activity not found.'], 404);
+        }
+
+        $material = $this->materialService->ensureForActivity($activity);
+        $result = $this->contentResolver->chunksForActivity($activity);
+
+        return response()->json([
+            'activity_id' => $activityId,
+            'status' => $result['status'],
+            'material' => $material ? [
+                'id' => $material->id,
+                'type' => $material->type,
+                'processing_status' => $material->processing_status,
+            ] : null,
+            'chunk_count' => $result['chunks']->count(),
+            'message' => match ($result['status']) {
+                'ready' => 'Adaptable content is ready.',
+                'processing', 'pending' => 'Material is being processed for personalization.',
+                'no_extractable_text' => 'Original asset preserved. Not enough text to personalize (e.g. video without transcript).',
+                default => 'No adaptable material found for this activity.',
+            },
         ]);
     }
 
@@ -83,14 +160,10 @@ class AdaptiveContentController extends Controller
             ));
         }
 
-        // Fetch or recalculate student profile with unified personalization context
-        $lessonPage = $chunk->lessonPage;
-        $courseId = null;
-        $sectionId = null;
-        if ($lessonPage && $lessonPage->activity && $lessonPage->activity->section) {
-            $courseId = $lessonPage->activity->course_id;
-            $sectionId = $lessonPage->activity->section_id;
-        }
+        // Fetch course context from lesson page or course material
+        $context = $this->contentResolver->courseContextForChunk($chunk);
+        $courseId = $context['course_id'];
+        $sectionId = $context['section_id'];
 
         $contentProfile = $this->contextService->contentProfileForAdaptation($student->id, $courseId);
         $profileArray = array_merge($contentProfile, [

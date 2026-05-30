@@ -12,10 +12,15 @@ class ContentChunkingService
      *
      * @return array Array of chunk IDs
      */
-    public function chunk(string $contentId, string $contentText, string $contentType = 'lecture'): array
-    {
-        // Remove existing chunks for this content first
-        ContentChunk::where('content_id', $contentId)->delete();
+    public function chunk(
+        string $contentId,
+        string $contentText,
+        string $contentType = 'lecture',
+        string $contentSource = 'lesson_page',
+    ): array {
+        ContentChunk::where('content_id', $contentId)
+            ->where('content_source', $contentSource)
+            ->delete();
 
         $rawChunks = $this->splitIntoChunks($contentText);
         $chunkIds = [];
@@ -24,6 +29,7 @@ class ContentChunkingService
             $chunk = ContentChunk::create([
                 'id' => Str::uuid()->toString(),
                 'content_id' => $contentId,
+                'content_source' => $contentSource,
                 'chunk_index' => $index,
                 'chunk_text' => $chunkText,
                 'chunk_type' => $this->mapContentType($contentType),
@@ -180,6 +186,13 @@ class ContentChunkingService
             'lesson' => 'lecture',
             'note' => 'note',
             'pdf' => 'pdf_text',
+            'pptx' => 'pdf_text',
+            'docx' => 'pdf_text',
+            'doc' => 'pdf_text',
+            'video' => 'lecture',
+            'youtube' => 'lecture',
+            'h5p' => 'lecture',
+            'scorm' => 'lecture',
             'example' => 'example',
             'quiz' => 'quiz',
             'assessment' => 'assessment',

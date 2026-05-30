@@ -739,6 +739,8 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
         Route::get('my-profile', [AdaptiveContentController::class, 'myProfile']);
         Route::get('courses/{courseId}/personalization', [PersonalizationController::class, 'show']);
         Route::get('content-chunks/{contentId}', [AdaptiveContentController::class, 'chunks']);
+        Route::get('activities/{activityId}/adaptive-chunks', [AdaptiveContentController::class, 'activityChunks']);
+        Route::post('activities/{activityId}/prepare-adaptation', [AdaptiveContentController::class, 'prepareActivity']);
         Route::get('content/{chunkId}', [AdaptiveContentController::class, 'show']);
         Route::post('adaptation/{adaptationId}/feedback', [AdaptiveContentController::class, 'feedback']);
         Route::post('{studentId}/recalculate-profile', [AdaptiveContentController::class, 'recalculateProfile']);

@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Jobs\ChunkContentJob;
 use App\Models\CourseMaterial;
 use App\Services\MaterialExtractorService;
 use Illuminate\Bus\Queueable;
@@ -38,14 +39,15 @@ class ProcessCourseMaterial implements ShouldQueue
             $text = match ($this->material->type) {
                 'pdf'     => $extractor->extractPdf($this->material->file_path),
                 'pptx'    => $extractor->extractPptx($this->material->file_path),
+                'docx', 'doc' => $extractor->extractDocx($this->material->file_path),
                 'video'   => $extractor->extractVideoMeta($this->material->file_path),
-                'youtube' => $extractor->getYoutubeTranscript($this->material->url),
+                'youtube' => $extractor->getYoutubeTranscript($this->material->url ?? ''),
                 'h5p'     => $extractor->extractH5p($this->material->file_path),
                 'scorm'   => $extractor->extractScorm($this->material->file_path),
                 default   => null,
             };
 
-            if ($text) {
+            if ($text && strlen(trim($text)) >= 80) {
                 $this->material->update([
                     'extracted_text'     => $text,
                     'processed_at'       => now(),
@@ -54,7 +56,14 @@ class ProcessCourseMaterial implements ShouldQueue
                     'processing_error'   => null,
                 ]);
 
-                Log::info('Material processed', [
+                ChunkContentJob::dispatch(
+                    $this->material->id,
+                    $text,
+                    $this->material->type,
+                    'course_material',
+                );
+
+                Log::info('Material processed and queued for chunking', [
                     'material_id' => $this->material->id,
                     'type'        => $this->material->type,
                     'word_count'  => str_word_count($text),
