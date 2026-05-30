@@ -5,7 +5,6 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Validation\ValidationException;
-use App\Constants\NotificationTypes;
 use App\Models\Notification;
 use App\Models\NotificationPreference;
 use App\Services\NotificationService;
@@ -31,6 +30,7 @@ class NotificationController extends Controller
     public function index(Request $request): JsonResponse
     {
         $user = $request->user();
+        $this->notificationService->seedDefaultPreferences($user->id);
 
         $validated = $request->validate([
             'page' => 'integer|min:1',
@@ -136,7 +136,6 @@ class NotificationController extends Controller
         $channel = $request->input('channel', 'in_app');
         $notification = Notification::where('user_id', $request->user()->id)
             ->where('id', $id)
-            ->where('channel', $channel)
             ->firstOrFail();
 
         $notification->markAsRead();
@@ -190,10 +189,8 @@ class NotificationController extends Controller
      */
     public function markClicked(Request $request, int $id): JsonResponse
     {
-        $channel = $request->input('channel', 'in_app');
         $notification = Notification::where('user_id', $request->user()->id)
             ->where('id', $id)
-            ->where('channel', $channel)
             ->firstOrFail();
 
         if (!$notification->clicked_at) {
@@ -221,10 +218,8 @@ class NotificationController extends Controller
         $channel = $request->input('channel', 'in_app');
         $notification = Notification::where('user_id', $request->user()->id)
             ->where('id', $id)
-            ->where('channel', $channel)
             ->firstOrFail();
 
-        $wasUnread = in_array($notification->status, ['sent', 'delivered']);
         $notification->delete();
 
         // Broadcast badge update
@@ -446,6 +441,8 @@ class NotificationController extends Controller
      */
     private function calculateUnreadCount(string $userId, string $channel = 'in_app'): int
     {
+        $this->notificationService->seedDefaultPreferences($userId);
+
         // Check global mute
         if ($this->notificationService->isGloballyMuted($userId)) {
             return 0;

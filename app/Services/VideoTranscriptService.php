@@ -130,6 +130,62 @@ TXT;
         });
     }
 
+    /**
+     * @param  array{course_name?: string|null, activity_name?: string|null, section_name?: string|null}  $context
+     * @return array{is_relevant: bool, confidence: float, reason: string}
+     */
+    public function assessCourseRelevance(string $extractedText, array $context): array
+    {
+        $courseName = trim((string) ($context['course_name'] ?? ''));
+        $activityName = trim((string) ($context['activity_name'] ?? ''));
+        $sectionName = trim((string) ($context['section_name'] ?? ''));
+
+        if (trim($extractedText) === '') {
+            return [
+                'is_relevant' => false,
+                'confidence' => 0.0,
+                'reason' => 'No usable transcript content was available for course matching.',
+            ];
+        }
+
+        if ($this->apiKey === '') {
+            return $this->heuristicRelevanceAssessment($extractedText, $context);
+        }
+
+        $prompt = <<<TXT
+Determine whether the extracted video content is relevant to the intended course context.
+
+Return JSON only in this exact shape:
+{"is_relevant": true, "confidence": 0.0, "reason": "short explanation"}
+
+Rules:
+- Use confidence from 0 to 1.
+- Mark false when the transcript appears to discuss a different subject than the course/topic context.
+- Be conservative. If uncertain, prefer false only when mismatch is reasonably clear.
+- Keep the reason under 30 words.
+
+Course: {$courseName}
+Section: {$sectionName}
+Activity: {$activityName}
+
+Extracted content:
+{$extractedText}
+TXT;
+
+        $raw = $this->generateText($prompt);
+        $json = json_decode(preg_replace('/```json|```/', '', $raw) ?? '', true);
+
+        if (! is_array($json) || ! array_key_exists('is_relevant', $json)) {
+            return $this->heuristicRelevanceAssessment($extractedText, $context);
+        }
+
+        return [
+            'is_relevant' => (bool) ($json['is_relevant'] ?? false),
+            'confidence' => max(0.0, min(1.0, (float) ($json['confidence'] ?? 0.0))),
+            'reason' => trim((string) ($json['reason'] ?? '')),
+        ];
+    }
+
     public function enrichLessonPageHtml(string $html): string
     {
         if (trim($html) === '' || ! $this->looksLikeVideoMarkup($html)) {
@@ -292,6 +348,42 @@ TXT;
     }
 
     /**
+     * @param  array{course_name?: string|null, activity_name?: string|null, section_name?: string|null}  $context
+     * @return array{is_relevant: bool, confidence: float, reason: string}
+     */
+    private function heuristicRelevanceAssessment(string $extractedText, array $context): array
+    {
+        $contextText = implode(' ', array_filter([
+            $context['course_name'] ?? null,
+            $context['section_name'] ?? null,
+            $context['activity_name'] ?? null,
+        ]));
+
+        $contextKeywords = $this->keywordSet($contextText);
+        $contentKeywords = $this->keywordSet($extractedText);
+
+        if ($contextKeywords === [] || $contentKeywords === []) {
+            return [
+                'is_relevant' => true,
+                'confidence' => 0.5,
+                'reason' => 'Course relevance could not be estimated confidently.',
+            ];
+        }
+
+        $matches = array_intersect($contextKeywords, $contentKeywords);
+        $coverage = count($matches) / max(1, min(count($contextKeywords), 6));
+        $isRelevant = $coverage >= 0.2;
+
+        return [
+            'is_relevant' => $isRelevant,
+            'confidence' => round(min(1, $coverage + 0.2), 2),
+            'reason' => $isRelevant
+                ? 'Transcript appears aligned with the course context.'
+                : 'Transcript keywords do not sufficiently align with the course context.',
+        ];
+    }
+
+    /**
      * @return array{title: string, description: string}
      */
     private function youtubeMetadata(string $url, ?string $fallbackTitle): array
@@ -432,6 +524,35 @@ TXT;
         $normalized = preg_replace("/\n{3,}/", "\n\n", $normalized) ?? $normalized;
 
         return mb_substr($normalized, 0, self::MAX_TRANSCRIPT_CHARS);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function keywordSet(string $text): array
+    {
+        $normalized = strtolower($text);
+        $normalized = preg_replace('/[^a-z0-9\s]+/', ' ', $normalized) ?? '';
+        $parts = preg_split('/\s+/', $normalized, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+
+        $stopWords = [
+            'the', 'and', 'for', 'with', 'that', 'this', 'from', 'into', 'your', 'about',
+            'course', 'video', 'lesson', 'topic', 'section', 'activity', 'will', 'have',
+            'has', 'was', 'were', 'are', 'but', 'not', 'you', 'our', 'their', 'they',
+            'them', 'what', 'when', 'where', 'which', 'while', 'would', 'could', 'should',
+            'been', 'being', 'also', 'than', 'then', 'some', 'more', 'most', 'very',
+        ];
+
+        $keywords = [];
+        foreach ($parts as $part) {
+            if (strlen($part) < 4 || in_array($part, $stopWords, true)) {
+                continue;
+            }
+
+            $keywords[$part] = true;
+        }
+
+        return array_keys($keywords);
     }
 
     private function detectMimeType(string $path): string

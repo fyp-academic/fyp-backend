@@ -63,7 +63,7 @@ class EmailAdapter implements ChannelAdapterInterface
     /**
      * Generate unsubscribe URL for the user.
      */
-    private function generateUnsubscribeUrl(int $userId): string
+    private function generateUnsubscribeUrl(string $userId): string
     {
         $token = hash_hmac('sha256', $userId, config('app.key'));
         return url("/unsubscribe?user={$userId}&token={$token}");

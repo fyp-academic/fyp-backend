@@ -58,6 +58,8 @@ class NotificationService
             // Create notification record for each channel
             $notifications = [];
             foreach ($enabledChannels as $pref) {
+                $channelDedupKey = $this->channelDedupKey($dedupKey, $pref->channel);
+
                 $notification = Notification::create([
                     'user_id' => $userId,
                     'type' => $type,
@@ -65,7 +67,7 @@ class NotificationService
                     'title' => $payload['title'] ?? 'New Notification',
                     'body' => $payload['body'] ?? null,
                     'payload' => $payload,
-                    'dedup_key' => $dedupKey,
+                    'dedup_key' => $channelDedupKey,
                     'status' => 'pending',
                     'retry_count' => 0,
                 ]);
@@ -118,10 +120,9 @@ class NotificationService
      */
     private function isDuplicate(string $dedupKey): bool
     {
-        if (!str_contains($dedupKey, '__')) {
-            return false; // Unique random keys are never duplicates
-        }
-        return Notification::where('dedup_key', $dedupKey)->exists();
+        return Notification::where('dedup_key', $dedupKey)
+            ->orWhere('dedup_key', 'like', $dedupKey . '__channel_%')
+            ->exists();
     }
 
     /**
@@ -137,7 +138,7 @@ class NotificationService
 
         // If no preferences exist, create defaults
         if ($prefs->isEmpty()) {
-            $prefs = $this->createDefaultPreferences($userId, $type);
+            return $this->createDefaultPreferences($userId, $type);
         }
 
         return $prefs->all();
@@ -164,6 +165,11 @@ class NotificationService
         }
 
         return $prefs;
+    }
+
+    private function channelDedupKey(string $dedupKey, string $channel): string
+    {
+        return "{$dedupKey}__channel_{$channel}";
     }
 
     /**

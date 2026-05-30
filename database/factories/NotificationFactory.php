@@ -27,13 +27,8 @@ class NotificationFactory extends Factory
     {
         return [
             'user_id' => User::factory(),
-            'type' => $this->faker->randomElement([
-                'assignment_posted',
-                'grade_released',
-                'course_announcement',
-                'quiz_available',
-            ]),
-            'channel' => $this->faker->randomElement(['in_app', 'email', 'push']),
+            'type' => 'course_announcement',
+            'channel' => 'in_app',
             'title' => $this->faker->sentence(),
             'body' => $this->faker->paragraph(),
             'payload' => null,

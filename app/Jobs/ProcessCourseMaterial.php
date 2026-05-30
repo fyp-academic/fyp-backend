@@ -17,6 +17,8 @@ class ProcessCourseMaterial implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    private const MIN_EXTRACTED_TEXT_LENGTH = 80;
+
     /**
      * Retry up to 3 times with exponential backoff.
      */
@@ -37,6 +39,8 @@ class ProcessCourseMaterial implements ShouldQueue
         $this->material->update(['processing_status' => 'processing']);
 
         try {
+            $this->material->loadMissing(['course', 'activity.section']);
+
             $text = match ($this->material->type) {
                 'pdf'     => $extractor->extractPdf($this->material->file_path),
                 'pptx'    => $extractor->extractPptx($this->material->file_path),
@@ -55,7 +59,26 @@ class ProcessCourseMaterial implements ShouldQueue
                 default   => null,
             };
 
-            if ($text && strlen(trim($text)) >= 80) {
+            $text = is_string($text) ? trim($text) : '';
+            $processingError = null;
+
+            if ($text !== '' && strlen($text) >= self::MIN_EXTRACTED_TEXT_LENGTH) {
+                if (in_array($this->material->type, ['video', 'youtube'], true)) {
+                    $relevance = $videoTranscriptService->assessCourseRelevance($text, [
+                        'course_name' => $this->material->course?->name,
+                        'section_name' => $this->material->activity?->section?->title ?? $this->material->activity?->section?->name ?? null,
+                        'activity_name' => $this->material->activity?->name ?? $this->material->title,
+                    ]);
+
+                    if (! $relevance['is_relevant'] && $relevance['confidence'] >= 0.55) {
+                        $processingError = 'content_mismatch: The extracted video content appears unrelated to this course activity. Personalization is paused until the resource is reviewed.';
+                    }
+                }
+            } else {
+                $processingError = $this->insufficientExtractionReason($text);
+            }
+
+            if ($processingError === null && $text !== '' && strlen($text) >= self::MIN_EXTRACTED_TEXT_LENGTH) {
                 $this->material->update([
                     'extracted_text'     => $text,
                     'processed_at'       => now(),
@@ -80,11 +103,15 @@ class ProcessCourseMaterial implements ShouldQueue
                 $this->material->update([
                     'processing_status' => 'completed',
                     'processed_at'      => now(),
+                    'extracted_text'    => null,
+                    'word_count'        => 0,
+                    'processing_error'  => $processingError,
                 ]);
 
                 Log::info('Material processed — no extractable text', [
                     'material_id' => $this->material->id,
                     'type'        => $this->material->type,
+                    'reason'      => $processingError,
                 ]);
             }
         } catch (\Throwable $e) {
@@ -100,6 +127,27 @@ class ProcessCourseMaterial implements ShouldQueue
 
             throw $e; // Let the queue system handle retries
         }
+    }
+
+    private function insufficientExtractionReason(string $text): string
+    {
+        if ($this->material->type === 'youtube') {
+            return 'transcript_unavailable: We could not obtain enough verified spoken content from this YouTube video to generate a reliable personalized guide.';
+        }
+
+        if ($this->material->type === 'video') {
+            if (($this->material->file_size ?? 0) > 18_000_000) {
+                return 'transcript_unavailable: This uploaded video is currently too large for direct transcript extraction in the personalization pipeline.';
+            }
+
+            if (str_starts_with($text, 'Video file:')) {
+                return 'transcript_unavailable: Only basic file metadata was available, so a reliable transcript could not be generated for personalization.';
+            }
+
+            return 'transcript_unavailable: We could not extract enough spoken teaching content from this video to personalize it safely.';
+        }
+
+        return 'extract_unavailable: Not enough usable text was available to generate a personalized guide.';
     }
 
     /**

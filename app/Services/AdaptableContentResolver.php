@@ -67,7 +67,11 @@ class AdaptableContentResolver
         if ($material) {
             $status = $material->processing_status;
             if ($status === 'completed' && $materialChunks->isEmpty() && ! $material->hasExtractedText()) {
-                $status = 'no_extractable_text';
+                $status = match (true) {
+                    str_starts_with((string) $material->processing_error, 'content_mismatch:') => 'content_mismatch',
+                    str_starts_with((string) $material->processing_error, 'transcript_unavailable:') => 'transcript_unavailable',
+                    default => 'no_extractable_text',
+                };
             }
         }
 
