@@ -38,6 +38,7 @@ use App\Http\Controllers\EngagementController;
 use App\Http\Controllers\InstructorAdaptationController;
 use App\Http\Controllers\InstructorEngagementController;
 use App\Http\Controllers\Student\AdaptiveContentController;
+use App\Http\Controllers\Student\PersonalizationController;
 
 Route::prefix('v1')->group(function () {
 
@@ -736,6 +737,7 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
     // ─────────────────────────────────────────────────────────────────────
     Route::middleware('auth:sanctum')->prefix('student')->group(function () {
         Route::get('my-profile', [AdaptiveContentController::class, 'myProfile']);
+        Route::get('courses/{courseId}/personalization', [PersonalizationController::class, 'show']);
         Route::get('content-chunks/{contentId}', [AdaptiveContentController::class, 'chunks']);
         Route::get('content/{chunkId}', [AdaptiveContentController::class, 'show']);
         Route::post('adaptation/{adaptationId}/feedback', [AdaptiveContentController::class, 'feedback']);

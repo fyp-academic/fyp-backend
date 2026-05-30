@@ -9,7 +9,10 @@ use App\Models\AdaptationSetting;
 use App\Models\ContentChunk;
 use App\Models\StudentProfile;
 use App\Models\User;
+use App\Services\AdaptationIntegrityService;
 use App\Services\GeminiAdaptationService;
+use App\Services\PersonalizationContextService;
+use App\Services\PresentationAdaptationService;
 use App\Services\StudentProfileService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -24,6 +27,9 @@ class AdaptiveContentController extends Controller
     public function __construct(
         private GeminiAdaptationService $geminiService,
         private StudentProfileService $profileService,
+        private PersonalizationContextService $contextService,
+        private PresentationAdaptationService $presentationService,
+        private AdaptationIntegrityService $integrityService,
     ) {}
 
     /**
@@ -63,31 +69,46 @@ class AdaptiveContentController extends Controller
 
         // Never adapt assessments or quizzes
         if (in_array($chunk->chunk_type, ['quiz', 'assessment'], true)) {
-            return response()->json([
-                'adapted_text' => $chunk->chunk_text,
-                'adaptation_id' => null,
-                'cached' => false,
-                'is_personalized' => false,
-                'original_text' => $chunk->chunk_text,
-                'profile' => null,
-                'settings_applied' => null,
-            ]);
+            return response()->json($this->deliveryPayload(
+                chunk: $chunk,
+                displayText: $chunk->chunk_text,
+                profile: null,
+                presentation: null,
+                settings: null,
+                deliveryStatus: 'original_only',
+                contentAdapted: false,
+                presentationActive: false,
+                integrity: ['instructor_content_immutable' => true, 'assessment_protected' => true],
+                extra: ['assessment_protected' => true],
+            ));
         }
 
-        // Fetch or recalculate student profile
-        $studentProfile = StudentProfile::where('student_id', $student->id)->first();
-        if (! $studentProfile) {
-            $profileArray = $this->profileService->recalculate($student->id);
-        } else {
-            $profileArray = [
-                'pace' => $studentProfile->pace,
-                'quiz_average' => $studentProfile->quiz_average,
-                'weak_topics' => $studentProfile->weak_topics ?? [],
-                'preferred_modality' => $studentProfile->preferred_modality,
-                'completion_rate' => $studentProfile->completion_rate,
-                'profile_hash' => $studentProfile->profile_hash,
-            ];
+        // Fetch or recalculate student profile with unified personalization context
+        $lessonPage = $chunk->lessonPage;
+        $courseId = null;
+        $sectionId = null;
+        if ($lessonPage && $lessonPage->activity && $lessonPage->activity->section) {
+            $courseId = $lessonPage->activity->course_id;
+            $sectionId = $lessonPage->activity->section_id;
         }
+
+        $contentProfile = $this->contextService->contentProfileForAdaptation($student->id, $courseId);
+        $profileArray = array_merge($contentProfile, [
+            'profile_hash' => md5(json_encode(array_filter([
+                'pace' => $contentProfile['pace'] ?? 'medium',
+                'quiz_average' => $contentProfile['quiz_average'] ?? 0,
+                'weak_topics' => $contentProfile['weak_topics'] ?? [],
+                'preferred_modality' => $contentProfile['preferred_modality'] ?? 'text',
+                'completion_rate' => $contentProfile['completion_rate'] ?? 0,
+                'knowledge_level' => $contentProfile['knowledge_level'] ?? 'intermediate',
+            ]))),
+        ]);
+
+        $presentationConfig = $this->presentationService->resolve(
+            $contentProfile,
+            $student,
+            null,
+        );
 
         // Allow modality override from query param
         if ($request->has('modality_override')) {
@@ -111,49 +132,40 @@ class AdaptiveContentController extends Controller
             ->exists();
 
         if ($flagged) {
-            return response()->json([
-                'adapted_text' => $chunk->chunk_text,
-                'adaptation_id' => null,
-                'cached' => false,
-                'is_personalized' => false,
-                'original_text' => $chunk->chunk_text,
-                'profile' => $profileArray,
-                'settings_applied' => null,
-                'flagged_reason' => 'Instructor flagged this adaptation',
-            ]);
+            return response()->json($this->deliveryPayload(
+                chunk: $chunk,
+                displayText: $chunk->chunk_text,
+                profile: $profileArray,
+                presentation: $presentationConfig,
+                settings: null,
+                deliveryStatus: 'flagged',
+                contentAdapted: false,
+                presentationActive: (bool) ($presentationConfig['is_active'] ?? false),
+                integrity: ['instructor_content_immutable' => true],
+                extra: ['flagged_reason' => 'Instructor flagged a previous adaptation for this content'],
+            ));
         }
 
         // Build cache key
         $cacheKey = "adapt:{$student->id}:{$chunkId}:{$profileHash}";
 
         // Check Redis cache (gracefully degrade if Redis is unavailable)
-        $cached = null;
+        $cachedPayload = null;
         try {
-            $cached = Cache::store('redis')->get($cacheKey);
+            $cachedPayload = Cache::store('redis')->get($cacheKey);
         } catch (\Throwable $e) {
             Log::warning('Redis cache get failed', ['error' => $e->getMessage()]);
         }
-        if ($cached) {
-            return response()->json([
-                'adapted_text' => $cached,
-                'adaptation_id' => null,
+        if (is_array($cachedPayload) && isset($cachedPayload['adapted_text'])) {
+            return response()->json(array_merge($cachedPayload, [
                 'cached' => true,
-                'is_personalized' => true,
                 'original_text' => $chunk->chunk_text,
                 'profile' => $profileArray,
-                'settings_applied' => null,
-            ]);
+                'presentation' => $presentationConfig,
+            ]));
         }
 
-        // Fetch instructor adaptation settings
-        // Determine course from the lesson page -> activity -> section -> course chain
-        $lessonPage = $chunk->lessonPage;
-        $courseId = null;
-        $sectionId = null;
-        if ($lessonPage && $lessonPage->activity && $lessonPage->activity->section) {
-            $courseId = $lessonPage->activity->course_id;
-            $sectionId = $lessonPage->activity->section_id;
-        }
+        // Fetch instructor adaptation settings (courseId/sectionId resolved above)
 
         $settings = AdaptationSetting::where('course_id', $courseId)
             ->where('topic_id', $sectionId)
@@ -176,56 +188,128 @@ class AdaptiveContentController extends Controller
             'ai_confidence_threshold' => 0.75,
         ];
 
-        // Call Gemini
-        $adaptedText = $this->geminiService->adapt($chunk->chunk_text, $profileArray, $settingsArray);
+        $rawAdapted = $this->geminiService->adapt($chunk->chunk_text, $profileArray, $settingsArray);
 
-        if ($adaptedText === null || $adaptedText === '') {
-            // Fallback silently
+        if ($rawAdapted === null || $rawAdapted === '') {
             Log::warning('Gemini adaptation failed, returning original text', [
                 'student_id' => $student->id,
                 'chunk_id' => $chunkId,
             ]);
 
-            return response()->json([
-                'adapted_text' => $chunk->chunk_text,
-                'adaptation_id' => null,
-                'cached' => false,
-                'is_personalized' => false,
-                'original_text' => $chunk->chunk_text,
-                'profile' => $profileArray,
-                'settings_applied' => $settingsArray,
-                'fallback_reason' => 'Gemini adaptation failed',
-            ]);
+            return response()->json($this->deliveryPayload(
+                chunk: $chunk,
+                displayText: $chunk->chunk_text,
+                profile: $profileArray,
+                presentation: $presentationConfig,
+                settings: $settingsArray,
+                deliveryStatus: 'fallback',
+                contentAdapted: false,
+                presentationActive: (bool) ($presentationConfig['is_active'] ?? false),
+                integrity: ['instructor_content_immutable' => true],
+                extra: ['fallback_reason' => 'AI adaptation unavailable'],
+            ));
         }
 
-        // Store in Redis
+        $assessment = $this->integrityService->assess($chunk->chunk_text, $rawAdapted, $settingsArray);
+        $displayText = $assessment['adapted_text'];
+        $contentAdapted = $assessment['content_adapted'];
+        $deliveryStatus = $assessment['delivery_status'];
+
+        if (! $contentAdapted && ($presentationConfig['is_active'] ?? false)) {
+            $deliveryStatus = 'presentation_only';
+        }
+
+        $presentationActive = (bool) ($presentationConfig['is_active'] ?? false);
+        $adaptationId = null;
+
+        if ($contentAdapted) {
+            $log = AdaptationLog::create([
+                'id' => Str::uuid()->toString(),
+                'student_id' => $student->id,
+                'chunk_id' => $chunkId,
+                'adapted_text' => $displayText,
+                'original_text' => $chunk->chunk_text,
+                'profile_snapshot' => $profileArray,
+                'instructor_settings_snapshot' => $settingsArray,
+                'flagged' => false,
+            ]);
+            $adaptationId = $log->id;
+        }
+
+        $payload = $this->deliveryPayload(
+            chunk: $chunk,
+            displayText: $displayText,
+            profile: $profileArray,
+            presentation: $presentationConfig,
+            settings: $settingsArray,
+            deliveryStatus: $deliveryStatus,
+            contentAdapted: $contentAdapted,
+            presentationActive: $presentationActive,
+            integrity: $assessment['integrity'],
+            extra: [
+                'adaptation_id' => $adaptationId,
+                'cached' => false,
+                'rejection_reason' => $assessment['rejection_reason'],
+                'similarity_to_original_percent' => $assessment['similarity_percent'],
+            ],
+        );
+
         try {
-            Cache::store('redis')->put($cacheKey, $adaptedText, now()->addSeconds(86400));
+            Cache::store('redis')->put($cacheKey, $payload, now()->addSeconds(86400));
         } catch (\Throwable $e) {
             Log::warning('Redis cache store failed', ['error' => $e->getMessage()]);
         }
 
-        // Log to adaptation_log
-        $log = AdaptationLog::create([
-            'id' => Str::uuid()->toString(),
-            'student_id' => $student->id,
-            'chunk_id' => $chunkId,
-            'adapted_text' => $adaptedText,
-            'original_text' => $chunk->chunk_text,
-            'profile_snapshot' => $profileArray,
-            'instructor_settings_snapshot' => $settingsArray,
-            'flagged' => false,
-        ]);
+        return response()->json($payload);
+    }
 
-        return response()->json([
-            'adapted_text' => $adaptedText,
-            'adaptation_id' => $log->id,
-            'cached' => false,
-            'is_personalized' => true,
+    /**
+     * Honest, structured API response — never claim adaptation when only layout changed or AI failed.
+     *
+     * @param  array<string, mixed>|null  $profile
+     * @param  array<string, mixed>|null  $presentation
+     * @param  array<string, mixed>|null  $settings
+     * @param  array<string, mixed>  $integrity
+     * @param  array<string, mixed>  $extra
+     * @return array<string, mixed>
+     */
+    private function deliveryPayload(
+        ContentChunk $chunk,
+        string $displayText,
+        ?array $profile,
+        ?array $presentation,
+        ?array $settings,
+        string $deliveryStatus,
+        bool $contentAdapted,
+        bool $presentationActive,
+        array $integrity,
+        array $extra = [],
+    ): array {
+        $transparencyMessage = $this->integrityService->transparencyMessage($deliveryStatus, $presentationActive);
+
+        return array_merge([
+            'adapted_text' => $displayText,
             'original_text' => $chunk->chunk_text,
-            'profile' => $profileArray,
-            'settings_applied' => $settingsArray,
-        ]);
+            'delivery_status' => $deliveryStatus,
+            'content_adapted' => $contentAdapted,
+            'presentation_active' => $presentationActive,
+            'is_personalized' => $contentAdapted,
+            'profile' => $profile,
+            'presentation' => $presentation,
+            'settings_applied' => $settings,
+            'integrity' => $integrity,
+            'transparency' => [
+                'message' => $transparencyMessage,
+                'instructor_content_immutable' => true,
+                'layers' => [
+                    'content' => $contentAdapted,
+                    'presentation' => $presentationActive,
+                    'navigation' => false,
+                ],
+            ],
+            'adaptation_id' => null,
+            'cached' => false,
+        ], $extra);
     }
 
     /**

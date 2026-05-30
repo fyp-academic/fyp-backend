@@ -127,18 +127,40 @@ class StudentProfileService
 
     private function calculatePreferredModality(string $studentId): string
     {
-        // Check engagement logs — which format has highest avg time-on-content
-        // We use material_interactions as a proxy for engagement modality.
-        $interactions = DB::table('material_interactions')
-            ->where('user_id', $studentId)
-            ->select('interaction_type', DB::raw('AVG(time_spent) as avg_time'))
-            ->groupBy('interaction_type')
-            ->orderByDesc('avg_time')
-            ->first();
+        $scores = DB::table('material_interactions')
+            ->join('course_materials', 'material_interactions.material_id', '=', 'course_materials.id')
+            ->where('material_interactions.student_id', $studentId)
+            ->select(
+                'course_materials.type',
+                DB::raw('SUM(material_interactions.total_duration_seconds) as total_time'),
+                DB::raw('AVG(material_interactions.video_watch_percent) as avg_video'),
+                DB::raw('AVG(material_interactions.pdf_scroll_depth_percent) as avg_pdf'),
+            )
+            ->groupBy('course_materials.type')
+            ->orderByDesc('total_time')
+            ->get();
 
-        if (! $interactions) {
-            // Fallback to user-declared preference if any
-            $user = DB::table('users')->where('id', $studentId)->first();
+        if ($scores->isNotEmpty()) {
+            $topType = $scores->first()->type;
+
+            return match ($topType) {
+                'video', 'youtube' => 'visual',
+                'h5p', 'scorm' => 'example-based',
+                'image' => 'visual',
+                default => 'text',
+            };
+        }
+
+        $user = DB::table('users')->where('id', $studentId)->first();
+        if ($user) {
+            $modes = json_decode($user->preferred_modes ?? '[]', true) ?: [];
+            if (in_array('video', $modes, true) || in_array('multimedia', $modes, true)) {
+                return 'visual';
+            }
+            if (in_array('classroom', $modes, true) || in_array('live', $modes, true)) {
+                return 'example-based';
+            }
+
             $vark = $user->vark_style ?? null;
             if ($vark === 'visual') {
                 return 'visual';
@@ -146,16 +168,9 @@ class StudentProfileService
             if ($vark === 'kinesthetic') {
                 return 'example-based';
             }
-            return 'text';
         }
 
-        $type = $interactions->interaction_type;
-
-        return match ($type) {
-            'video_watch', 'diagram_click', 'image_view' => 'visual',
-            'example_expand', 'interactive', 'simulation' => 'example-based',
-            default => 'text',
-        };
+        return 'text';
     }
 
     private function calculateCompletionRate(string $studentId): float
