@@ -5,6 +5,7 @@ namespace App\Jobs;
 use App\Jobs\ChunkContentJob;
 use App\Models\CourseMaterial;
 use App\Services\MaterialExtractorService;
+use App\Services\VideoTranscriptService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -31,7 +32,7 @@ class ProcessCourseMaterial implements ShouldQueue
     /**
      * Extract text from the uploaded material and persist it.
      */
-    public function handle(MaterialExtractorService $extractor): void
+    public function handle(MaterialExtractorService $extractor, VideoTranscriptService $videoTranscriptService): void
     {
         $this->material->update(['processing_status' => 'processing']);
 
@@ -40,8 +41,15 @@ class ProcessCourseMaterial implements ShouldQueue
                 'pdf'     => $extractor->extractPdf($this->material->file_path),
                 'pptx'    => $extractor->extractPptx($this->material->file_path),
                 'docx', 'doc' => $extractor->extractDocx($this->material->file_path),
-                'video'   => $extractor->extractVideoMeta($this->material->file_path),
-                'youtube' => $extractor->getYoutubeTranscript($this->material->url ?? ''),
+                'video'   => $videoTranscriptService->transcribeLocalVideo(
+                    $this->material->file_path ?? '',
+                    $this->material->url,
+                    $this->material->title,
+                ),
+                'youtube' => $videoTranscriptService->transcribeYouTube(
+                    $this->material->url ?? '',
+                    $this->material->title,
+                ),
                 'h5p'     => $extractor->extractH5p($this->material->file_path),
                 'scorm'   => $extractor->extractScorm($this->material->file_path),
                 default   => null,

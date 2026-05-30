@@ -8,15 +8,18 @@ use App\Models\Activity;
 use App\Models\AdaptationLog;
 use App\Models\AdaptationSetting;
 use App\Models\ContentChunk;
+use App\Models\LessonPage;
 use App\Models\StudentProfile;
 use App\Models\User;
 use App\Services\AdaptableContentResolver;
 use App\Services\ActivityMaterialService;
 use App\Services\AdaptationIntegrityService;
+use App\Services\ContentChunkingService;
 use App\Services\GeminiAdaptationService;
 use App\Services\PersonalizationContextService;
 use App\Services\PresentationAdaptationService;
 use App\Services\StudentProfileService;
+use App\Services\VideoTranscriptService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
@@ -35,6 +38,8 @@ class AdaptiveContentController extends Controller
         private AdaptationIntegrityService $integrityService,
         private AdaptableContentResolver $contentResolver,
         private ActivityMaterialService $materialService,
+        private ContentChunkingService $chunkingService,
+        private VideoTranscriptService $videoTranscriptService,
     ) {}
 
     /**
@@ -52,6 +57,28 @@ class AdaptiveContentController extends Controller
             ->where('content_source', $source)
             ->orderBy('chunk_index')
             ->get(['id', 'chunk_index', 'chunk_text', 'chunk_type', 'content_source']);
+
+        if ($source === 'lesson_page' && $chunks->isEmpty()) {
+            $page = LessonPage::find($contentId);
+
+            if ($page && trim((string) $page->content) !== '') {
+                $chunkSource = $this->videoTranscriptService->enrichLessonPageHtml($page->content);
+
+                if (trim(strip_tags($chunkSource)) !== '') {
+                    $this->chunkingService->chunk(
+                        $page->id,
+                        $chunkSource,
+                        $page->page_type ?? 'content',
+                        'lesson_page',
+                    );
+
+                    $chunks = ContentChunk::where('content_id', $contentId)
+                        ->where('content_source', $source)
+                        ->orderBy('chunk_index')
+                        ->get(['id', 'chunk_index', 'chunk_text', 'chunk_type', 'content_source']);
+                }
+            }
+        }
 
         return response()->json([
             'content_id' => $contentId,

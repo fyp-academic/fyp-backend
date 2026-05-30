@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Services\ContentChunkingService;
+use App\Services\VideoTranscriptService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -23,9 +24,18 @@ class ChunkContentJob implements ShouldQueue
         private string $contentSource = 'lesson_page',
     ) {}
 
-    public function handle(ContentChunkingService $chunkingService): void
+    public function handle(
+        ContentChunkingService $chunkingService,
+        VideoTranscriptService $videoTranscriptService,
+    ): void
     {
-        if (trim($this->contentText) === '') {
+        $contentText = $this->contentText;
+
+        if ($this->contentSource === 'lesson_page') {
+            $contentText = $videoTranscriptService->enrichLessonPageHtml($contentText);
+        }
+
+        if (trim($contentText) === '') {
             Log::info('Content chunking skipped — empty text', ['content_id' => $this->contentId]);
 
             return;
@@ -34,7 +44,7 @@ class ChunkContentJob implements ShouldQueue
         try {
             $chunkIds = $chunkingService->chunk(
                 $this->contentId,
-                $this->contentText,
+                $contentText,
                 $this->contentType,
                 $this->contentSource,
             );
