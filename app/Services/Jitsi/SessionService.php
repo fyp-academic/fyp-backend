@@ -274,18 +274,46 @@ class SessionService
     {
         // Instructor of the session or admin can always join
         if ($session->instructor_id === $user->id || $user->isAdmin()) {
+            Log::info("Session join authorized for user {$user->id} as instructor/admin", [
+                'session_id' => $session->id,
+                'user_id' => $user->id,
+            ]);
             return;
         }
 
-        // Student must be enrolled
+        // Student must be enrolled with approved status
         $enrollment = Enrollment::where('course_id', $session->course_id)
             ->where('user_id', $user->id)
-            ->where('status', 'active')
             ->first();
 
         if (!$enrollment) {
+            Log::warning("Session join denied: user not enrolled in course", [
+                'session_id' => $session->id,
+                'user_id' => $user->id,
+                'course_id' => $session->course_id,
+            ]);
             throw new \Exception('User is not enrolled in this course');
         }
+
+        // Allow active, enrolled, or approved statuses
+        $allowedStatuses = ['active', 'enrolled', 'approved'];
+        if (!in_array(strtolower($enrollment->status), $allowedStatuses, true)) {
+            Log::warning("Session join denied: invalid enrollment status", [
+                'session_id' => $session->id,
+                'user_id' => $user->id,
+                'course_id' => $session->course_id,
+                'enrollment_status' => $enrollment->status,
+                'allowed_statuses' => $allowedStatuses,
+            ]);
+            throw new \Exception('Your enrollment in this course is not active. Current status: ' . $enrollment->status);
+        }
+
+        Log::info("Session join authorized for enrolled student", [
+            'session_id' => $session->id,
+            'user_id' => $user->id,
+            'course_id' => $session->course_id,
+            'enrollment_status' => $enrollment->status,
+        ]);
     }
 
     /**

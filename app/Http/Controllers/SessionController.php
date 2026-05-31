@@ -282,6 +282,15 @@ class SessionController extends Controller
         $user = $request->user();
         $session = Session::findOrFail($id);
 
+        Log::info("Session token request received", [
+            'session_id' => $id,
+            'user_id' => $user->id,
+            'user_name' => $user->name,
+            'session_status' => $session->status,
+            'scheduled_at' => $session->scheduled_at,
+            'duration' => $session->duration,
+        ]);
+
         // Check if session is within the allowed time window
         $timeStatus = $this->getSessionTimeStatus($session->scheduled_at, $session->duration);
         
@@ -307,6 +316,13 @@ class SessionController extends Controller
 
         try {
             $tokenData = $this->sessionService->getSessionToken($id, $user->id);
+
+            Log::info("Session token generated successfully", [
+                'session_id' => $id,
+                'user_id' => $user->id,
+                'room_name' => $tokenData['roomName'],
+                'is_moderator' => $tokenData['isModerator'],
+            ]);
 
             // Engagement: record join punctuality (negative = early, positive = late minutes)
             try {
@@ -350,7 +366,12 @@ class SessionController extends Controller
             ]);
 
         } catch (\Exception $e) {
-            Log::error("Token generation failed for session {$id}, user {$user->id}: " . $e->getMessage());
+            Log::error("Token generation failed for session {$id}, user {$user->id}: " . $e->getMessage(), [
+                'session_id' => $id,
+                'user_id' => $user->id,
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
             return response()->json(['error' => $e->getMessage()], 403);
         }
     }
