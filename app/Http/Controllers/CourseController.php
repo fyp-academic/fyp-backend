@@ -465,12 +465,14 @@ class CourseController extends Controller
     /**
      * POST /api/v1/courses/{id}/enroll
      * Enroll a user into the course with a specified role.
+     * Supports both user_id and email.
      */
     public function enroll(Request $request, string $id): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'user_id' => 'required|string|exists:users,id',
-            'role'    => 'required|string|in:student,teaching_assistant',
+            'user_id' => 'sometimes|nullable|string|exists:users,id',
+            'email'   => 'sometimes|nullable|string|email',
+            'role'    => 'required|string|in:student,teaching_assistant,observer',
         ]);
 
         if ($validator->fails()) {
@@ -478,8 +480,22 @@ class CourseController extends Controller
         }
 
         $course = Course::findOrFail($id);
+        
+        // Resolve user_id from email if email provided
+        $userId = $request->user_id;
+        if ($request->has('email') && !$userId) {
+            $user = User::where('email', $request->email)->first();
+            if (!$user) {
+                return response()->json(['message' => 'User with this email not found.'], 404);
+            }
+            $userId = $user->id;
+        }
 
-        $exists = Enrollment::where('user_id', $request->user_id)
+        if (!$userId) {
+            return response()->json(['message' => 'Either user_id or email must be provided.'], 422);
+        }
+
+        $exists = Enrollment::where('user_id', $userId)
             ->where('course_id', $id)->exists();
 
         if ($exists) {
@@ -488,7 +504,7 @@ class CourseController extends Controller
 
         $enrollment = Enrollment::create([
             'id'            => Str::uuid()->toString(),
-            'user_id'       => $request->user_id,
+            'user_id'       => $userId,
             'course_id'     => $id,
             'role'          => $request->role,
             'status'        => 'active',
@@ -500,7 +516,19 @@ class CourseController extends Controller
 
         $course->increment('enrolled_students');
 
-        return response()->json(['message' => 'User enrolled.', 'data' => $enrollment], 201);
+        $enrollment->load('user');
+        return response()->json([
+            'message' => 'User enrolled.',
+            'data' => [
+                'id'           => $enrollment->user_id,
+                'name'         => $enrollment->user->name ?? '',
+                'email'        => $enrollment->user->email ?? '',
+                'role'         => $enrollment->role,
+                'enrolledDate' => $enrollment->enrolled_date,
+                'progress'     => $enrollment->progress,
+                'groups'       => $enrollment->groups ?? [],
+            ]
+        ], 201);
     }
 
     /**

@@ -12,8 +12,18 @@ class QuizAnswer extends Model
     public $timestamps   = false;
 
     protected $fillable = [
-        'id', 'question_id', 'text', 'grade_fraction', 'feedback', 'sort_order',
+        'id', 'question_id', 'match_group', 'text', 'answer_type', 'answer_image_url',
+        'grade_fraction', 'min_value', 'max_value', 'feedback', 'sort_order',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'grade_fraction' => 'decimal:4',
+            'min_value'      => 'decimal:4',
+            'max_value'      => 'decimal:4',
+        ];
+    }
 
     public function question(): BelongsTo
     {

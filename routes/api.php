@@ -39,6 +39,7 @@ use App\Http\Controllers\InstructorAdaptationController;
 use App\Http\Controllers\InstructorEngagementController;
 use App\Http\Controllers\Student\AdaptiveContentController;
 use App\Http\Controllers\Student\PersonalizationController;
+use App\Http\Controllers\GroupController;
 
 Route::prefix('v1')->group(function () {
 
@@ -169,6 +170,14 @@ Route::prefix('v1')->group(function () {
             Route::post('/{id}/enroll',              [CourseController::class, 'enroll']);
             Route::delete('/{id}/enroll/{userId}',   [CourseController::class, 'unenroll']);
 
+            // Groups Management (nested under course)
+            Route::get('/{id}/groups',                                [GroupController::class, 'index']);
+            Route::get('/{id}/groups/{groupName}',                   [GroupController::class, 'show']);
+            Route::post('/{id}/groups/{groupName}/add-student',      [GroupController::class, 'addStudent']);
+            Route::delete('/{id}/groups/{groupName}/remove-student/{userId}', [GroupController::class, 'removeStudent']);
+            Route::delete('/{id}/groups/{groupName}',                [GroupController::class, 'destroy']);
+            Route::put('/{id}/groups/{groupName}/rename',            [GroupController::class, 'rename']);
+
             // Instructor Management (admin only)
             Route::get('/{id}/eligible-instructors', [CourseController::class, 'eligibleInstructors']);
             Route::put('/{id}/instructor',           [CourseController::class, 'assignInstructor']);
@@ -229,6 +238,9 @@ Route::prefix('v1')->group(function () {
 
             // Quiz questions nested under activity (admin only: create)
             Route::post('/{id}/questions', [QuizController::class, 'store']);
+
+            // Essay grading (instructor)
+            Route::get('/{id}/essay-attempts', [QuizController::class, 'essayAttempts']);
 
             // Assignment submissions (students use public POST endpoint below)
             Route::get('/{id}/submissions',  [AssignmentController::class, 'index']);
@@ -551,6 +563,9 @@ Route::middleware('auth:sanctum')->put('submissions/{id}/grade', [AssignmentCont
 Route::middleware('auth:sanctum')->get('quiz-attempts/{id}',               [QuizController::class, 'getAttempt']);
 Route::middleware('auth:sanctum')->post('quiz-attempts/{id}/submit',      [QuizController::class, 'submitAttempt']);
 Route::middleware('auth:sanctum')->get('my-quiz-attempts',                 [QuizController::class, 'myAttempts']);
+
+// Essay grading (instructor)
+Route::middleware('auth:sanctum')->middleware('admin.or.instructor')->put('quiz-attempt-responses/{id}/grade', [QuizController::class, 'gradeEssayResponse']);
 
 // Proctoring
 Route::middleware('auth:sanctum')->prefix('proctoring')->group(function () {

@@ -15,11 +15,16 @@ use App\Models\Course;
 use App\Models\CognitiveSignal;
 use App\Services\NotificationService;
 use App\Services\EngagementComputationService;
+use App\Services\QuestionTypes\QuestionTypeHandlerFactory;
+use App\Traits\TimeEnforcementHelper;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
+use Exception;
 
 class QuizController extends Controller
 {
+    use TimeEnforcementHelper;
+
     public function __construct(
         private NotificationService $notificationService,
         private EngagementComputationService $engagement,
@@ -224,6 +229,42 @@ class QuizController extends Controller
                 ->where('type', 'quiz')
                 ->firstOrFail();
 
+            // Check time restrictions on the quiz
+            $settings = $activity->settings ?? [];
+            $startTime = isset($settings['start_time']) 
+                ? new \DateTime($settings['start_time']) 
+                : null;
+            $endTime = $activity->due_date ? $activity->due_date->endOfDay() : null;
+            
+            // Convert to Carbon instances if needed
+            if ($startTime && !$startTime instanceof \Carbon\Carbon) {
+                $startTime = \Carbon\Carbon::parse($startTime);
+            }
+            
+            // Check time window
+            $timeStatus = $this->getActivityTimeStatus($startTime, $endTime);
+            
+            if (!$timeStatus['can_attempt']) {
+                $reason = $timeStatus['reason'] ?? 'unknown';
+                $message = $reason === 'not_started' 
+                    ? 'Quiz has not started yet. Please try again after the start time.'
+                    : 'Quiz submission window has closed. No further attempts allowed.';
+                
+                Log::warning('Quiz attempt blocked due to time restriction', [
+                    'activity_id' => $id,
+                    'student_id' => $user->id,
+                    'reason' => $reason,
+                    'time_status' => $timeStatus,
+                ]);
+                
+                return response()->json([
+                    'message' => $message,
+                    'error' => 'time_restriction',
+                    'reason' => $reason,
+                    'time_status' => $timeStatus,
+                ], 403);
+            }
+
             // Get or create the next attempt number
             $lastAttempt = QuizAttempt::where('activity_id', $id)
                 ->where('student_id', $user->id)
@@ -320,42 +361,93 @@ class QuizController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        // Store responses
+        // Store responses and grade using type-specific handlers
         $totalScore = 0;
         $maxScore = 0;
-        $needsGrading = false;
+        $needsManualGrading = false;
 
         foreach ($request->responses as $response) {
             $question = QuizQuestion::findOrFail($response['question_id']);
             $maxScore += $question->default_mark ?? 1;
 
-            $hasAnswer = !empty($response['answer_id'] ?? null);
-            if (!$hasAnswer && !empty($response['response_text'] ?? null)) {
-                $needsGrading = true;
-            }
+            try {
+                // Get appropriate handler for this question type
+                $handler = QuestionTypeHandlerFactory::create($question);
 
-            $attemptResponse = QuizAttemptResponse::create([
-                'id' => Str::uuid()->toString(),
-                'attempt_id' => $id,
-                'question_id' => $response['question_id'],
-                'answer_id' => $response['answer_id'] ?? null,
-                'response_text' => $response['response_text'] ?? null,
-                'marks_max' => $question->default_mark ?? 1,
-            ]);
+                // Validate response format
+                if (!$handler->isValidResponse($response)) {
+                    Log::warning("Invalid response for {$question->type} question", [
+                        'question_id' => $response['question_id'],
+                        'attempt_id' => $id,
+                    ]);
+                    // Store even invalid responses for review
+                    QuizAttemptResponse::create([
+                        'id' => Str::uuid()->toString(),
+                        'attempt_id' => $id,
+                        'question_id' => $response['question_id'],
+                        'answer_id' => $response['answer_id'] ?? null,
+                        'response_text' => $response['response_text'] ?? null,
+                        'response_data' => $response['response_data'] ?? null,
+                        'marks_max' => $question->default_mark ?? 1,
+                        'marks_awarded' => 0,
+                        'is_correct' => false,
+                        'auto_graded' => false,
+                    ]);
+                    continue;
+                }
 
-            // Auto-grade multiple choice questions
-            if ($hasAnswer) {
-                $answer = QuizAnswer::findOrFail($response['answer_id']);
-                $marks = ($answer->grade_fraction ?? 0) * ($question->default_mark ?? 1);
-                $attemptResponse->marks_awarded = $marks;
-                $attemptResponse->save();
-                $totalScore += $marks;
+                // Grade the response
+                $grading = $handler->gradeResponse($response);
+
+                $attemptResponse = QuizAttemptResponse::create([
+                    'id' => Str::uuid()->toString(),
+                    'attempt_id' => $id,
+                    'question_id' => $response['question_id'],
+                    'answer_id' => $response['answer_id'] ?? null,
+                    'response_text' => $response['response_text'] ?? null,
+                    'response_data' => $response['response_data'] ?? null,
+                    'marks_max' => $question->default_mark ?? 1,
+                    'marks_awarded' => $grading['marks_awarded'] ?? 0,
+                    'feedback' => $grading['feedback'] ?? null,
+                    'is_correct' => $grading['is_correct'] ?? null,
+                    'auto_graded' => $grading['auto_graded'] ?? false,
+                    'graded_at' => now(),
+                ]);
+
+                if ($grading['auto_graded'] ?? false) {
+                    $totalScore += $grading['marks_awarded'] ?? 0;
+                } else {
+                    $needsManualGrading = true;
+                }
+
+                Log::info("Response graded for {$question->type} question", [
+                    'question_id' => $response['question_id'],
+                    'marks_awarded' => $grading['marks_awarded'],
+                    'auto_graded' => $grading['auto_graded'],
+                ]);
+            } catch (Exception $e) {
+                Log::error("Error grading question {$response['question_id']}", [
+                    'error' => $e->getMessage(),
+                    'attempt_id' => $id,
+                ]);
+                // Mark for manual grading on error
+                QuizAttemptResponse::create([
+                    'id' => Str::uuid()->toString(),
+                    'attempt_id' => $id,
+                    'question_id' => $response['question_id'],
+                    'answer_id' => $response['answer_id'] ?? null,
+                    'response_text' => $response['response_text'] ?? null,
+                    'marks_max' => $question->default_mark ?? 1,
+                    'feedback' => 'Error during grading - requires manual review.',
+                    'auto_graded' => false,
+                ]);
+                $needsManualGrading = true;
             }
         }
 
-        // Update attempt
+        // Update attempt with results
         $attempt->update([
-            'status' => 'submitted',
+            'status' => $needsManualGrading ? 'pending_review' : 'submitted',
             'submitted_at' => now(),
             'score' => $totalScore,
             'max_score' => $maxScore,
@@ -364,7 +456,7 @@ class QuizController extends Controller
         $percentage = $maxScore > 0 ? round(($totalScore / $maxScore) * 100, 2) : 0;
 
         $attempt->load('responses');
-        $attempt->needs_grading = $needsGrading;
+        $attempt->needs_grading = $needsManualGrading;
         $attempt->score_percentage = $percentage;
 
         // Engagement: log quiz_submit event + update skip_rate in cognitive signals
@@ -447,5 +539,155 @@ class QuizController extends Controller
             ->get();
 
         return response()->json(['data' => $attempts]);
+    }
+
+    /**
+     * GET /api/v1/activities/{id}/essay-attempts
+     * Get all quiz attempts with essay questions that need manual grading for an activity.
+     * Instructor endpoint for grading essays.
+     */
+    public function essayAttempts(string $activityId): JsonResponse
+    {
+        try {
+            $activity = Activity::findOrFail($activityId);
+
+            // Get all attempts for this activity that have essay responses needing grading
+            $attempts = QuizAttempt::where('activity_id', $activityId)
+                ->with(['responses.question', 'responses.answer'])
+                ->whereIn('status', ['pending_review', 'submitted'])
+                ->orderByDesc('submitted_at')
+                ->get()
+                ->map(function ($attempt) {
+                    $essayResponses = $attempt->responses->filter(function ($response) {
+                        return $response->question && $response->question->type === 'essay';
+                    });
+
+                    if ($essayResponses->isEmpty()) {
+                        return null;
+                    }
+
+                    return [
+                        'attempt_id'      => $attempt->id,
+                        'student_id'      => $attempt->student_id,
+                        'course_id'       => $attempt->course_id,
+                        'activity_id'     => $attempt->activity_id,
+                        'activity_name'   => $activity->name,
+                        'attempt_number'  => $attempt->attempt_number,
+                        'status'          => $attempt->status,
+                        'submitted_at'    => $attempt->submitted_at,
+                        'score'           => $attempt->score,
+                        'max_score'       => $attempt->max_score,
+                        'essay_responses' => $essayResponses->map(function ($response) use ($activity) {
+                            return [
+                                'response_id'     => $response->id,
+                                'question_id'     => $response->question_id,
+                                'question_text'   => $response->question->question_text ?? '',
+                                'question_marks'  => $response->question->default_mark ?? 1,
+                                'student_response' => $response->response_text,
+                                'marks_awarded'   => $response->marks_awarded,
+                                'marks_max'       => $response->marks_max,
+                                'feedback'        => $response->feedback,
+                                'is_graded'       => $response->marks_awarded !== null,
+                            ];
+                        })->values()->toArray(),
+                    ];
+                })
+                ->filter(fn($attempt) => $attempt !== null)
+                ->values();
+
+            return response()->json(['data' => $attempts, 'activity_id' => $activityId]);
+        } catch (\Throwable $e) {
+            Log::error('Error retrieving essay attempts', [
+                'activity_id' => $activityId,
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json([
+                'message' => 'Failed to retrieve essay attempts.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * PUT /api/v1/quiz-attempt-responses/{id}/grade
+     * Grade an essay response
+     */
+    public function gradeEssayResponse(Request $request, string $responseId): JsonResponse
+    {
+        try {
+            $validator = Validator::make($request->all(), [
+                'marks_awarded' => 'required|numeric|min:0',
+                'feedback'      => 'sometimes|nullable|string',
+            ]);
+
+            if ($validator->fails()) {
+                return response()->json(['errors' => $validator->errors()], 422);
+            }
+
+            $response = QuizAttemptResponse::findOrFail($responseId);
+            $question = QuizQuestion::findOrFail($response->question_id);
+
+            // Only allow grading essays
+            if ($question->type !== 'essay') {
+                return response()->json(['message' => 'Only essay questions can be graded manually.'], 422);
+            }
+
+            // Validate marks don't exceed max
+            if ($request->marks_awarded > $response->marks_max) {
+                return response()->json([
+                    'message' => 'Marks awarded cannot exceed maximum marks.',
+                    'error' => "Max: {$response->marks_max}",
+                ], 422);
+            }
+
+            $response->update([
+                'marks_awarded' => $request->marks_awarded,
+                'feedback'      => $request->input('feedback'),
+                'is_correct'    => $request->marks_awarded == $response->marks_max,
+                'auto_graded'   => false,
+                'graded_at'     => now(),
+            ]);
+
+            // Update attempt score if all responses are now graded
+            $attempt = QuizAttempt::findOrFail($response->attempt_id);
+            $allResponses = $attempt->responses;
+            $totalScore = 0;
+            $allGraded = true;
+
+            foreach ($allResponses as $resp) {
+                if ($resp->marks_awarded !== null) {
+                    $totalScore += $resp->marks_awarded;
+                } else {
+                    $allGraded = false;
+                }
+            }
+
+            if ($allGraded) {
+                $attempt->update([
+                    'status' => 'submitted',
+                    'score'  => $totalScore,
+                ]);
+            }
+
+            Log::info('Essay response graded', [
+                'response_id' => $responseId,
+                'marks_awarded' => $request->marks_awarded,
+                'attempt_id' => $response->attempt_id,
+            ]);
+
+            return response()->json([
+                'message' => 'Essay response graded successfully.',
+                'data' => $response,
+            ]);
+        } catch (\Throwable $e) {
+            Log::error('Error grading essay response', [
+                'response_id' => $responseId,
+                'error' => $e->getMessage(),
+            ]);
+            return response()->json([
+                'message' => 'Failed to grade essay response.',
+                'error' => $e->getMessage(),
+            ], 500);
+        }
     }
 }

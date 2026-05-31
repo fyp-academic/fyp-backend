@@ -15,6 +15,7 @@ use App\Services\Jitsi\RecordingService;
 use App\Services\Jitsi\SessionService;
 use App\Services\Jitsi\RateLimiterService;
 use App\Services\NotificationService;
+use App\Traits\TimeEnforcementHelper;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Log;
@@ -22,6 +23,8 @@ use Illuminate\Support\Facades\Validator;
 
 class SessionController extends Controller
 {
+    use TimeEnforcementHelper;
+
     private SessionService $sessionService;
     private RecordingService $recordingService;
     private AIService $aiService;
@@ -213,6 +216,9 @@ class SessionController extends Controller
         // Authorization check
         $this->authorizeSessionAccess($user, $session);
 
+        // Calculate time status
+        $timeStatus = $this->getSessionTimeStatus($session->scheduled_at, $session->duration);
+
         $response = [
             'id' => $session->id,
             'title' => $session->title,
@@ -244,6 +250,7 @@ class SessionController extends Controller
             'jitsi_domain' => $this->tokenService->getDomain(),
             'participant_count' => $session->participants->whereNull('left_at')->count(),
             'is_instructor' => $session->instructor_id === $user->id,
+            'time_status' => $timeStatus,
         ];
 
         // Include participants for instructor/admin
@@ -274,6 +281,29 @@ class SessionController extends Controller
     {
         $user = $request->user();
         $session = Session::findOrFail($id);
+
+        // Check if session is within the allowed time window
+        $timeStatus = $this->getSessionTimeStatus($session->scheduled_at, $session->duration);
+        
+        if (!$timeStatus['can_join']) {
+            $reason = $timeStatus['reason'] ?? 'unknown';
+            $message = $reason === 'not_started' 
+                ? 'Session has not started yet. Please try again after the scheduled start time.'
+                : 'Session has ended. You can no longer join this session.';
+            
+            Log::warning('Session join blocked due to time restriction', [
+                'session_id' => $id,
+                'user_id' => $user->id,
+                'reason' => $reason,
+                'time_status' => $timeStatus,
+            ]);
+            
+            return response()->json([
+                'error' => $message,
+                'reason' => $reason,
+                'time_status' => $timeStatus,
+            ], 403);
+        }
 
         try {
             $tokenData = $this->sessionService->getSessionToken($id, $user->id);

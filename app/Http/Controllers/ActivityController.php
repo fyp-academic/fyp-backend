@@ -14,10 +14,13 @@ use App\Models\UserActivityCompletion;
 use App\Models\Notification;
 use App\Services\NotificationService;
 use App\Services\EngagementComputationService;
+use App\Traits\TimeEnforcementHelper;
 use Illuminate\Support\Facades\Log;
 
 class ActivityController extends Controller
 {
+    use TimeEnforcementHelper;
+
     public function __construct(
         private NotificationService $notificationService,
         private EngagementComputationService $engagement,
@@ -107,7 +110,25 @@ class ActivityController extends Controller
             Log::warning('Engagement: failed to log content_view', ['activity' => $id, 'error' => $e->getMessage()]);
         }
 
-        return response()->json(['data' => $activity]);
+        // Add time status for quiz activities
+        $response = ['data' => $activity];
+        
+        if ($activity->type === 'quiz' && $isEnrolled) {
+            $settings = $activity->settings ?? [];
+            $startTime = isset($settings['start_time']) 
+                ? new \DateTime($settings['start_time']) 
+                : null;
+            $endTime = $activity->due_date ? $activity->due_date->endOfDay() : null;
+            
+            if ($startTime && !$startTime instanceof \Carbon\Carbon) {
+                $startTime = \Carbon\Carbon::parse($startTime);
+            }
+            
+            $timeStatus = $this->getActivityTimeStatus($startTime, $endTime);
+            $response['time_status'] = $timeStatus;
+        }
+
+        return response()->json($response);
     }
 
     /**

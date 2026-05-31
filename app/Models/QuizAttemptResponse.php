@@ -13,14 +13,20 @@ class QuizAttemptResponse extends Model
 
     protected $fillable = [
         'id', 'attempt_id', 'question_id', 'answer_id',
-        'response_text', 'marks_awarded', 'marks_max', 'feedback',
+        'response_text', 'response_data', 'marks_awarded', 'marks_max', 'feedback',
+        'is_correct', 'auto_graded', 'graded_at', 'graded_by',
+        'response_time', 'attempts',
     ];
 
     protected function casts(): array
     {
         return [
-            'marks_awarded' => 'float',
-            'marks_max'     => 'float',
+            'marks_awarded'   => 'decimal:2',
+            'marks_max'       => 'decimal:2',
+            'is_correct'      => 'boolean',
+            'auto_graded'     => 'boolean',
+            'graded_at'       => 'datetime',
+            'response_data'   => 'array',
         ];
     }
 
