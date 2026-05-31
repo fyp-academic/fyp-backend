@@ -23,7 +23,7 @@ class MultipleChoiceHandler extends QuestionTypeHandler
             'default_mark'      => 'numeric|min:0',
             'shuffle_answers'   => 'boolean',
             'multiple_answers'  => 'boolean',
-            'choice_numbering'  => 'nullable|in:none,a,b,c,A,B,C,i,ii,iii,I,II,III,1,2,3',
+            'choice_numbering'  => 'nullable|in:none,a,A,i,I,1',
             'penalty'           => 'numeric|min:0|max:1',
         ];
     }
