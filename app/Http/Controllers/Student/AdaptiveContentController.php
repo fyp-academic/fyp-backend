@@ -298,6 +298,10 @@ class AdaptiveContentController extends Controller
             Log::warning('Gemini adaptation failed, returning original text', [
                 'student_id' => $student->id,
                 'chunk_id' => $chunkId,
+                'course_id' => $courseId,
+                'section_id' => $sectionId,
+                'student_knowledge_level' => $profileArray['knowledge_level'] ?? 'unknown',
+                'student_pace' => $profileArray['pace'] ?? 'unknown',
             ]);
 
             return response()->json($this->deliveryPayload(

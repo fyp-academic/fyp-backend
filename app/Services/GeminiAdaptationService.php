@@ -13,6 +13,12 @@ class GeminiAdaptationService
 
     private string $baseUrl;
 
+    private const MAX_RETRIES = 3;
+
+    private const RETRY_DELAY_MS = 500;
+
+    private const TIMEOUT_SECONDS = 60;
+
     public function __construct()
     {
         $this->apiKey = (string) (config('services.gemini.api_key') ?? '');
@@ -22,6 +28,7 @@ class GeminiAdaptationService
 
     /**
      * Rewrite delivery only. Instructor source in DB is never modified.
+     * Includes retry logic with exponential backoff for resilience.
      */
     public function adapt(string $originalText, array $studentProfile, array $instructorSettings): ?string
     {
@@ -56,35 +63,95 @@ class GeminiAdaptationService
             ],
         ];
 
-        try {
-            $url = "{$this->baseUrl}/models/{$this->model}:generateContent?key={$this->apiKey}";
-            $response = Http::timeout(30)->withHeaders([
-                'Content-Type' => 'application/json',
-            ])->post($url, $payload);
+        // Attempt with retry logic
+        for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
+            try {
+                $url = "{$this->baseUrl}/models/{$this->model}:generateContent?key={$this->apiKey}";
+                $response = Http::timeout(self::TIMEOUT_SECONDS)->withHeaders([
+                    'Content-Type' => 'application/json',
+                ])->post($url, $payload);
 
-            if ($response->failed()) {
-                Log::error('Gemini adaptation API error', [
-                    'status' => $response->status(),
-                    'body' => $response->body(),
+                if ($response->successful()) {
+                    $text = $response->json('candidates.0.content.parts.0.text');
+
+                    if (!empty($text)) {
+                        Log::info('Gemini adaptation successful', [
+                            'attempt' => $attempt,
+                            'profile_knowledge_level' => $studentProfile['knowledge_level'] ?? 'unknown',
+                            'profile_pace' => $studentProfile['pace'] ?? 'unknown',
+                            'text_length' => strlen($originalText),
+                            'output_length' => strlen($text),
+                        ]);
+
+                        return trim($text);
+                    }
+
+                    // Empty response
+                    Log::warning('Gemini adaptation returned empty text', [
+                        'attempt' => $attempt,
+                        'response_status' => $response->status(),
+                    ]);
+
+                    return null;
+                }
+
+                // Failed response - check if retryable
+                $status = $response->status();
+                $isRetryable = $this->isRetryableError($status);
+
+                Log::warning('Gemini adaptation API error', [
+                    'attempt' => $attempt,
+                    'status' => $status,
+                    'is_retryable' => $isRetryable,
+                    'max_attempts' => self::MAX_RETRIES,
+                    'body' => substr($response->body(), 0, 200),
+                ]);
+
+                // If not retryable or last attempt, give up
+                if (!$isRetryable || $attempt === self::MAX_RETRIES) {
+                    return null;
+                }
+
+                // Wait before retry with exponential backoff
+                $delay = self::RETRY_DELAY_MS * (2 ** ($attempt - 1));
+                usleep($delay * 1000); // Convert ms to microseconds
+            } catch (\ConnectException $e) {
+                // Network error - retryable
+                Log::warning('Gemini adaptation connection error', [
+                    'attempt' => $attempt,
+                    'error' => $e->getMessage(),
+                    'max_attempts' => self::MAX_RETRIES,
+                ]);
+
+                if ($attempt < self::MAX_RETRIES) {
+                    $delay = self::RETRY_DELAY_MS * (2 ** ($attempt - 1));
+                    usleep($delay * 1000);
+                    continue;
+                }
+
+                return null;
+            } catch (\Throwable $e) {
+                // Generic exception
+                Log::error('Gemini adaptation exception', [
+                    'attempt' => $attempt,
+                    'error' => $e->getMessage(),
+                    'error_class' => get_class($e),
                 ]);
 
                 return null;
             }
-
-            $text = $response->json('candidates.0.content.parts.0.text');
-
-            if (empty($text)) {
-                Log::warning('Gemini adaptation returned empty text');
-
-                return null;
-            }
-
-            return trim($text);
-        } catch (\Throwable $e) {
-            Log::error('Gemini adaptation exception', ['error' => $e->getMessage()]);
-
-            return null;
         }
+
+        return null;
+    }
+
+    /**
+     * Determine if an HTTP status code represents a retryable error
+     */
+    private function isRetryableError(int $status): bool
+    {
+        // Retryable: server errors, timeouts, rate limits
+        return in_array($status, [408, 429, 500, 502, 503, 504], true);
     }
 
     private function resolveMaxTokens(string $originalText, array $settings): int
