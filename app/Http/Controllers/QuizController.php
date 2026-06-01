@@ -271,6 +271,22 @@ class QuizController extends Controller
                 ->orderByDesc('attempt_number')
                 ->first();
 
+            // Check if quiz has been submitted - if so, only allow review
+            if ($lastAttempt && in_array($lastAttempt->status, ['submitted', 'graded', 'pending_review'])) {
+                Log::info('Student attempting to retake submitted quiz', [
+                    'activity_id' => $id,
+                    'student_id' => $user->id,
+                    'last_attempt_id' => $lastAttempt->id,
+                    'last_attempt_status' => $lastAttempt->status,
+                ]);
+                
+                return response()->json([
+                    'message' => 'This quiz has already been submitted. You can only review your previous attempt.',
+                    'error' => 'quiz_already_submitted',
+                    'attempt_id' => $lastAttempt->id,
+                ], 422);
+            }
+
             $attemptNumber = ($lastAttempt ? $lastAttempt->attempt_number : 0) + 1;
 
             // Create a new quiz attempt
@@ -313,11 +329,23 @@ class QuizController extends Controller
     /**
      * GET /api/v1/quiz-attempts/{id}
      * Get a specific quiz attempt with responses.
+     * For submitted/graded attempts, includes all questions with correct answers for review.
      */
     public function getAttempt(string $id): JsonResponse
     {
         $attempt = QuizAttempt::with(['responses.question', 'responses.answer'])
             ->findOrFail($id);
+
+        // For submitted or graded attempts, include all questions with correct answers for review
+        if (in_array($attempt->status, ['submitted', 'graded', 'pending_review'])) {
+            $activity = Activity::findOrFail($attempt->activity_id);
+            $allQuestions = QuizQuestion::where('activity_id', $attempt->activity_id)
+                ->with('answers')
+                ->get();
+            
+            $attempt->all_questions = $allQuestions;
+            $attempt->review_mode = true;
+        }
 
         return response()->json(['data' => $attempt]);
     }
