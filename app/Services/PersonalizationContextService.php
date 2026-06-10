@@ -9,6 +9,7 @@ use App\Models\RiskScore;
 use App\Models\StudentProfile;
 use App\Models\User;
 use App\Models\UserActivityCompletion;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -71,18 +72,25 @@ class PersonalizationContextService
             $weakTopics,
         );
 
-        $presentation = app(PresentationAdaptationService::class)
-            ->resolve($contentProfile, $user, $risk);
+        $presentationService = app(PresentationAdaptationService::class);
+
+        // Select AI presentation mode (cached 30 min) and merge into content profile for context
+        $contentProfileWithIds = array_merge($contentProfile, [
+            'student_id' => $studentId,
+            'course_id'  => $courseId,
+        ]);
+        $presentationMode = $presentationService->selectMode($contentProfileWithIds);
+        $presentation = $presentationService->resolve($contentProfile, $user, $risk, $presentationMode);
 
         $navigation = app(NavigationAdaptationService::class)
             ->resolve($studentId, $courseId, $contentProfile, $learnerProfile, $behavioral, $weakTopics);
 
         return [
-            'student_id' => $studentId,
-            'course_id' => $courseId,
-            'content' => $contentProfile,
-            'presentation' => $presentation,
-            'navigation' => $navigation,
+            'student_id'  => $studentId,
+            'course_id'   => $courseId,
+            'content'     => $contentProfile,
+            'presentation'=> $presentation,
+            'navigation'  => $navigation,
         ];
     }
 

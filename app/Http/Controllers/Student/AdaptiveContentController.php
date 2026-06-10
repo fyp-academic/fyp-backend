@@ -24,6 +24,8 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
 use Illuminate\Support\Str;
@@ -65,7 +67,7 @@ class AdaptiveContentController extends Controller
                 $chunkSource = $this->videoTranscriptService->enrichLessonPageHtml($page->content);
 
                 if (trim(strip_tags($chunkSource)) !== '') {
-                    $this->chunkingService->chunk(
+                    $this->chunkingService->chunkWithSemantics(
                         $page->id,
                         $chunkSource,
                         $page->page_type ?? 'content',
@@ -292,7 +294,8 @@ class AdaptiveContentController extends Controller
             'ai_confidence_threshold' => 0.75,
         ];
 
-        $rawAdapted = $this->geminiService->adapt($chunk->chunk_text, $profileArray, $settingsArray);
+        $lessonCtx = $this->buildLessonContext($chunk, $presentationConfig);
+        $rawAdapted = $this->geminiService->adapt($chunk->chunk_text, $profileArray, $settingsArray, $lessonCtx);
 
         if ($rawAdapted === null || $rawAdapted === '') {
             Log::warning('Gemini adaptation failed, returning original text', [
@@ -526,6 +529,213 @@ class AdaptiveContentController extends Controller
             'message' => 'Profile recalculated.',
             'profile' => $profile,
         ]);
+    }
+
+    /**
+     * Call Gemini directly for a ≤200-word lesson summary without using the throwing GeminiService.
+     */
+    private function generateLessonSummary(string $plainText): string
+    {
+        $apiKey  = (string) (config('services.gemini.api_key') ?? '');
+        $model   = (string) (config('services.gemini.model') ?? 'gemini-2.5-flash');
+        $baseUrl = rtrim((string) (config('services.gemini.base_url') ?? 'https://generativelanguage.googleapis.com/v1beta'), '/');
+
+        if ($apiKey === '') {
+            return '';
+        }
+
+        try {
+            $response = Http::timeout(25)->withHeaders(['Content-Type' => 'application/json'])->post(
+                "{$baseUrl}/models/{$model}:generateContent?key={$apiKey}",
+                [
+                    'contents' => [['role' => 'user', 'parts' => [['text' => "Summarise the learning objectives and main sections of this lesson in ≤200 words:\n\n{$plainText}"]]]],
+                    'generationConfig' => ['temperature' => 0.1, 'maxOutputTokens' => 300],
+                    'systemInstruction' => ['parts' => [['text' => 'Summarise educational lesson content concisely. Return plain text only.']]],
+                ]
+            );
+
+            if ($response->successful()) {
+                return trim((string) $response->json('candidates.0.content.parts.0.text', ''));
+            }
+        } catch (\Throwable $e) {
+            Log::warning('AdaptiveContentController: lesson summary generation failed', ['error' => $e->getMessage()]);
+        }
+
+        return '';
+    }
+
+    /**
+     * Build lesson-level context for the chunk adaptation call.
+     * Generates and caches a ≤200-word lesson summary on first access.
+     *
+     * @param  array<string, mixed>  $presentationConfig
+     * @return array<string, mixed>
+     */
+    private function buildLessonContext(ContentChunk $chunk, array $presentationConfig = []): array
+    {
+        if ($chunk->content_source !== 'lesson_page') {
+            return [];
+        }
+
+        $page = LessonPage::find($chunk->content_id);
+        if (! $page) {
+            return [];
+        }
+
+        // Generate/refresh lesson context summary when stale (> 48 h) or missing
+        $needsSummary = $page->ai_context_summary === null
+            || $page->context_summary_at === null
+            || $page->context_summary_at->diffInHours(now()) > 48;
+
+        if ($needsSummary) {
+            $redisCacheKey = "lesson-ctx:{$page->id}";
+            $summaryFromRedis = null;
+            try {
+                $summaryFromRedis = Cache::store('redis')->get($redisCacheKey);
+            } catch (\Throwable) {}
+
+            if (is_string($summaryFromRedis) && $summaryFromRedis !== '') {
+                $page->ai_context_summary = $summaryFromRedis;
+            } else {
+                $plainText = strip_tags($page->content ?? '');
+                $plainText = mb_substr(preg_replace('/\s+/', ' ', $plainText) ?? '', 0, 4000);
+
+                if (trim($plainText) !== '') {
+                    $generated = $this->generateLessonSummary($plainText);
+
+                    if ($generated !== '') {
+                        $page->ai_context_summary = $generated;
+                        $page->context_summary_at = now();
+                        $page->save();
+
+                        try {
+                            Cache::store('redis')->put($redisCacheKey, $generated, now()->addHours(48));
+                        } catch (\Throwable) {}
+                    }
+                }
+            }
+        }
+
+        // Collect key_terms from prior chunks to prevent re-introduction
+        $priorTerms = ContentChunk::where('content_id', $chunk->content_id)
+            ->where('content_source', 'lesson_page')
+            ->where('chunk_index', '<', $chunk->chunk_index)
+            ->whereNotNull('key_terms')
+            ->get(['key_terms'])
+            ->flatMap(fn ($c) => $c->key_terms ?? [])
+            ->unique()
+            ->values()
+            ->toArray();
+
+        $totalChunks = ContentChunk::where('content_id', $chunk->content_id)
+            ->where('content_source', 'lesson_page')
+            ->count();
+
+        return [
+            'lesson_summary'    => (string) ($page->ai_context_summary ?? ''),
+            'semantic_role'     => (string) ($chunk->semantic_role ?? ''),
+            'key_terms'         => $priorTerms,
+            'position_pct'      => (int) ($chunk->lesson_position_pct ?? 0),
+            'chunk_index'       => (int) ($chunk->chunk_index ?? 0),
+            'total_chunks'      => $totalChunks,
+            'presentation_mode' => (string) ($presentationConfig['mode'] ?? ''),
+        ];
+    }
+
+    /**
+     * GET /api/v1/student/activities/{activityId}/video-learning-support
+     * Returns personalised transcript, summary, notes, and study questions for a video activity.
+     */
+    public function videoLearningSupport(string $activityId): JsonResponse
+    {
+        $student = Auth::user();
+        if (! $student) {
+            return response()->json(['message' => 'Unauthenticated.'], 401);
+        }
+
+        $activity = Activity::find($activityId);
+        if (! $activity) {
+            return response()->json(['message' => 'Activity not found.'], 404);
+        }
+
+        // Resolve course context
+        $courseId = null;
+        if ($activity->section_id) {
+            $section = \Illuminate\Support\Facades\DB::table('sections')
+                ->where('id', $activity->section_id)
+                ->value('course_id');
+            $courseId = $section ? (string) $section : null;
+        }
+
+        $contentProfile = $this->contextService->contentProfileForAdaptation($student->id, $courseId);
+        $profileHash = md5(json_encode([
+            $contentProfile['knowledge_level'] ?? '',
+            $contentProfile['preferred_modality'] ?? '',
+            $contentProfile['weak_topics'] ?? [],
+        ]));
+        $cacheKey = "video-support:{$activityId}:{$student->id}:{$profileHash}";
+
+        // Return cached response when available
+        try {
+            $cached = Cache::store('redis')->get($cacheKey);
+            if (is_array($cached)) {
+                return response()->json(array_merge($cached, ['cached' => true]));
+            }
+        } catch (\Throwable) {}
+
+        // Resolve transcript
+        $transcript = '';
+        $hasTranscript = false;
+
+        $videoUrl = (string) ($activity->video_url ?? $activity->url ?? '');
+
+        if ($videoUrl !== '') {
+            // YouTube URL
+            $transcript = $this->videoTranscriptService->transcribeYouTube($videoUrl);
+            $hasTranscript = trim($transcript) !== '';
+        }
+
+        if (! $hasTranscript) {
+            // Local video via course material
+            $result = $this->contentResolver->chunksForActivity($activity);
+            if ($result['material'] && $result['material']->hasExtractedText()) {
+                $transcript = (string) ($result['material']->extracted_text ?? '');
+                $hasTranscript = trim($transcript) !== '';
+            }
+        }
+
+        if (! $hasTranscript) {
+            return response()->json([
+                'activity_id'     => $activityId,
+                'has_transcript'  => false,
+                'transcript'      => '',
+                'summary'         => '',
+                'notes'           => ['key_points' => [], 'definitions' => [], 'study_questions' => [], 'further_review' => []],
+                'profile_applied' => ['knowledge_level' => $contentProfile['knowledge_level'] ?? 'intermediate', 'modality' => $contentProfile['preferred_modality'] ?? 'text'],
+            ]);
+        }
+
+        $summary = $this->videoTranscriptService->summarizeForLearner($transcript, $contentProfile);
+        $notes   = $this->videoTranscriptService->extractLearnerNotes($transcript, $contentProfile);
+
+        $payload = [
+            'activity_id'     => $activityId,
+            'has_transcript'  => true,
+            'transcript'      => mb_substr($transcript, 0, 6000),
+            'summary'         => $summary,
+            'notes'           => $notes,
+            'profile_applied' => [
+                'knowledge_level' => $contentProfile['knowledge_level'] ?? 'intermediate',
+                'modality'        => $contentProfile['preferred_modality'] ?? 'text',
+            ],
+            'cached' => false,
+        ];
+
+        try {
+            Cache::store('redis')->put($cacheKey, $payload, now()->addHours(12));
+        } catch (\Throwable) {}
+
+        return response()->json($payload);
     }
 
     /**

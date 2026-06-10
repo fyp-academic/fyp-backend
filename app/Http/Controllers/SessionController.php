@@ -657,6 +657,51 @@ class SessionController extends Controller
     }
 
     /**
+     * GET /api/sessions/:id/personalized-summary
+     * Returns the session AI summary re-formatted for the authenticated student's profile.
+     */
+    public function getPersonalizedSummary(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $session = Session::findOrFail($id);
+
+        $this->authorizeSessionAccess($user, $session);
+
+        if (! $session->ai_summary) {
+            return response()->json([
+                'session_id' => $id,
+                'summary'    => null,
+                'status'     => 'pending',
+                'message'    => 'Session summary not yet available.',
+            ]);
+        }
+
+        // Build a compact learner profile for personalization
+        $profile = [
+            'knowledge_level'    => 'intermediate',
+            'preferred_modality' => $user->preferred_modes[0] ?? 'text',
+            'pace'               => $user->pace_preference ?? 'medium',
+            'weak_topics'        => [],
+        ];
+
+        try {
+            $aiService = app(\App\Services\Jitsi\AIService::class);
+            $personalizedSummary = $aiService->personalizeSessionSummary($id, $profile);
+        } catch (\Throwable) {
+            $personalizedSummary = (string) $session->ai_summary;
+        }
+
+        return response()->json([
+            'session_id'   => $id,
+            'summary'      => $personalizedSummary,
+            'base_summary' => $session->ai_summary,
+            'status'       => 'completed',
+            'personalized' => $personalizedSummary !== (string) $session->ai_summary,
+            'generated_at' => $session->updated_at,
+        ]);
+    }
+
+    /**
      * GET /api/recordings/:id/url
      * Get signed download URL for recording
      */

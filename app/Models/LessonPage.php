@@ -13,12 +13,14 @@ class LessonPage extends Model
     protected $fillable = [
         'id', 'activity_id', 'title', 'content',
         'page_type', 'sort_order', 'jumps',
+        'ai_context_summary', 'context_summary_at',
     ];
 
     protected function casts(): array
     {
         return [
             'jumps' => 'array',
+            'context_summary_at' => 'datetime',
         ];
     }
 

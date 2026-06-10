@@ -6,6 +6,7 @@ use App\Models\Session;
 use App\Models\SessionTranscript;
 use App\Events\TranscriptCreated;
 use App\Services\GeminiService;
+use App\Services\VideoTranscriptService;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -143,6 +144,29 @@ class AIService
         } catch (\Exception $e) {
             Log::error("Failed to generate summary for session {$sessionId}: " . $e->getMessage());
             throw $e;
+        }
+    }
+
+    /**
+     * Re-format the session's existing AI summary for a specific learner's profile.
+     *
+     * @param  array<string, mixed>  $learnerProfile
+     */
+    public function personalizeSessionSummary(string $sessionId, array $learnerProfile): string
+    {
+        $session = Session::findOrFail($sessionId);
+
+        $baseSummary = (string) ($session->ai_summary ?? '');
+        if ($baseSummary === '') {
+            return '';
+        }
+
+        try {
+            $transcriptService = app(VideoTranscriptService::class);
+            return $transcriptService->summarizeForLearner($baseSummary, $learnerProfile);
+        } catch (\Throwable $e) {
+            Log::warning("AIService: personalizeSessionSummary failed for {$sessionId}", ['error' => $e->getMessage()]);
+            return $baseSummary;
         }
     }
 

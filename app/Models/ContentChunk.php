@@ -14,6 +14,11 @@ class ContentChunk extends Model
 
     protected $fillable = [
         'id', 'content_id', 'content_source', 'chunk_index', 'chunk_text', 'chunk_type',
+        'semantic_role', 'key_terms', 'lesson_position_pct',
+    ];
+
+    protected $casts = [
+        'key_terms' => 'array',
     ];
 
     public function lessonPage(): BelongsTo

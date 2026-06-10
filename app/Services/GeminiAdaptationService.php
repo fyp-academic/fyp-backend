@@ -29,8 +29,15 @@ class GeminiAdaptationService
     /**
      * Rewrite delivery only. Instructor source in DB is never modified.
      * Includes retry logic with exponential backoff for resilience.
+     *
+     * @param  array{lesson_summary?: string, semantic_role?: string, key_terms?: string[], position_pct?: int, total_chunks?: int, chunk_index?: int, presentation_mode?: string}  $lessonContext
      */
-    public function adapt(string $originalText, array $studentProfile, array $instructorSettings): ?string
+    public function adapt(
+        string $originalText,
+        array $studentProfile,
+        array $instructorSettings,
+        array $lessonContext = [],
+    ): ?string
     {
         if (empty($this->apiKey)) {
             Log::error('GeminiAdaptationService: Missing Gemini API key');
@@ -43,7 +50,7 @@ class GeminiAdaptationService
         }
 
         $systemPrompt = $this->systemPrompt();
-        $userPrompt = $this->buildUserPrompt($originalText, $studentProfile, $instructorSettings);
+        $userPrompt = $this->buildUserPrompt($originalText, $studentProfile, $instructorSettings, $lessonContext);
         $maxTokens = $this->resolveMaxTokens($originalText, $instructorSettings);
 
         $payload = [
@@ -188,10 +195,11 @@ STRICT RULES:
 7. For "visual" delivery: reorganize existing sentences into markdown tables or bullet lists using existing words only — do not invent diagram content.
 8. For "example-based" delivery: lead with an example only if one already exists in the original; otherwise use clearest existing illustration.
 9. "Advanced depth" means surface relationships between concepts already stated — never introduce new concepts.
+10. Never repeat scaffolding, context, or term definitions already established in earlier chunks of the same lesson. The LESSON CONTEXT block (when present) tells you what came before — honour it.
 TXT;
     }
 
-    private function buildUserPrompt(string $originalText, array $profile, array $settings): string
+    private function buildUserPrompt(string $originalText, array $profile, array $settings, array $lessonContext = []): string
     {
         $pace = $profile['pace'] ?? 'medium';
         $quizAverage = $profile['quiz_average'] ?? 0;
@@ -232,6 +240,75 @@ TXT;
 
         $wordBudget = (int) min(400, max(80, (int) (str_word_count(strip_tags($originalText)) * 1.25)));
 
+        // Build optional lesson context block
+        $lessonContextBlock = '';
+        if (! empty($lessonContext)) {
+            $lessonSummary = (string) ($lessonContext['lesson_summary'] ?? '');
+            $semanticRole  = (string) ($lessonContext['semantic_role'] ?? '');
+            $positionPct   = (int)    ($lessonContext['position_pct'] ?? 0);
+            $priorTerms    = implode(', ', array_map('strval', $lessonContext['key_terms'] ?? [])) ?: 'none';
+            $chunkIndex    = (int) ($lessonContext['chunk_index'] ?? 0);
+            $totalChunks   = (int) ($lessonContext['total_chunks'] ?? 1);
+
+            $roleNote = $semanticRole === 'summary'
+                ? 'This chunk closes the lesson — consolidate, do not re-explain concepts.'
+                : ($semanticRole === 'introduction'
+                    ? 'This chunk opens the lesson — set up context without anticipating later sections.'
+                    : '');
+
+            $lessonContextBlock = <<<CTX
+
+LESSON CONTEXT (for continuity — do not repeat what was already established):
+- Lesson overview: {$lessonSummary}
+- This chunk role: {$semanticRole} (chunk {$chunkIndex} of {$totalChunks}, {$positionPct}% through lesson)
+- Terms already introduced in prior chunks: {$priorTerms}
+- Continuity instruction: Do NOT re-scaffold or re-define any term from the list above.{$roleNote}
+CTX;
+        }
+
+        // Build optional presentation mode block
+        $presentationModeBlock = '';
+        $presentationMode = (string) ($lessonContext['presentation_mode'] ?? '');
+        if ($presentationMode !== '') {
+            $presentationModeBlock = match ($presentationMode) {
+                'guided_steps' => <<<'PM'
+
+PRESENTATION MODE: guided_steps
+- Structure the output as numbered steps where logically appropriate.
+- Bold key technical terms on first mention: **term**.
+- Mark the single most important concept per step with ==highlight== syntax.
+- Use one idea per sentence; add short transitional phrases between steps.
+- Apply Mayer's Signaling: begin each major step with a directional cue (e.g. "First, ...", "Next, ...", "Finally, ...").
+PM,
+                'visual_discovery' => <<<'PM'
+
+PRESENTATION MODE: visual_discovery
+- Prefer markdown tables and section headings over dense prose where the content allows.
+- Group related concepts under clear headings (## or ###).
+- Bold key terms within sentences.
+- Use bullet lists for enumerations of 3 or more items.
+- Apply Mayer's Signaling: use headings as visual anchors directing learner attention.
+PM,
+                'deep_focus' => <<<'PM'
+
+PRESENTATION MODE: deep_focus
+- Write in dense academic prose; avoid unnecessary step numbering or bullet lists.
+- Surface logical connections between ideas stated in the original using connective language (therefore, consequently, which implies, etc.).
+- Compress any redundant phrasing from the original.
+- Apply Mayer's Signaling only for the single most critical concept (bold once).
+PM,
+                'narrative_example' => <<<'PM'
+
+PRESENTATION MODE: narrative_example
+- If an example or scenario exists in the original, lead with it before the theoretical explanation.
+- Use a --- markdown separator between the example/scenario and the theory section.
+- Write in a conversational explanatory tone.
+- Ensure the theory section explicitly refers back to the opening example.
+PM,
+                default => '',
+            };
+        }
+
         return <<<TXT
 ORIGINAL INSTRUCTOR CONTENT (authoritative — do not alter meaning):
 """
@@ -258,7 +335,7 @@ INSTRUCTOR PERMISSIONS:
 - Analogies (from original concepts only): {$allowAnalogies}
 - Lock technical definitions word-for-word: {$lockTechnicalDefinitions}
 - Adaptation depth: {$minDifficulty}–{$maxDifficulty} (1=minimal rephrase, 5=full delivery rewrite; never add facts)
-
+{$lessonContextBlock}{$presentationModeBlock}
 TASK:
 Produce a student delivery copy. Same learning objective. Same facts. Different phrasing/structure only.
 Target length: about {$wordBudget} words (never exceed 150% of original word count).

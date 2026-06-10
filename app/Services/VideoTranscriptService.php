@@ -134,6 +134,122 @@ TXT;
      * @param  array{course_name?: string|null, activity_name?: string|null, section_name?: string|null}  $context
      * @return array{is_relevant: bool, confidence: float, reason: string}
      */
+    /**
+     * Generate a personalised summary of a video transcript tailored to the learner's profile.
+     *
+     * @param  array<string, mixed>  $profile
+     */
+    public function summarizeForLearner(string $transcript, array $profile): string
+    {
+        if (trim($transcript) === '' || $this->apiKey === '') {
+            return '';
+        }
+
+        $knowledgeLevel = (string) ($profile['knowledge_level'] ?? 'intermediate');
+        $modality       = (string) ($profile['preferred_modality'] ?? 'text');
+        $profileHash    = md5(serialize([$knowledgeLevel, $modality]));
+        $cacheKey       = 'video-summary:' . md5($transcript) . ':' . $profileHash;
+
+        return Cache::remember($cacheKey, now()->addHours(24), function () use ($transcript, $knowledgeLevel, $modality): string {
+            $preamble = $knowledgeLevel === 'novice'
+                ? 'Begin with a short "What you need to know first" section (2-3 sentences) covering any prerequisite concepts mentioned in the video.'
+                : '';
+
+            $formatInstruction = $modality === 'visual'
+                ? 'Format the summary as a bullet-point list grouped under short headings.'
+                : 'Write in clear prose paragraphs.';
+
+            $depthInstruction = match ($knowledgeLevel) {
+                'novice'    => 'Use simple language, define technical terms in plain English, and explain why concepts matter.',
+                'advanced'  => 'Assume domain familiarity. Surface connections between concepts and omit basic definitions.',
+                default     => 'Balance clarity and completeness.',
+            };
+
+            $prompt = <<<TXT
+Summarise the following educational video transcript for a learner.
+
+{$preamble}
+{$formatInstruction}
+{$depthInstruction}
+Keep the summary under 300 words. Do not invent content not present in the transcript.
+
+TRANSCRIPT:
+{$transcript}
+TXT;
+
+            $result = $this->generateText($prompt);
+            return $result !== '' ? $this->truncateText($result) : '';
+        });
+    }
+
+    /**
+     * Extract structured learning notes from a video transcript, personalised to the learner.
+     *
+     * @param  array<string, mixed>  $profile
+     * @return array{key_points: string[], definitions: array<int, array{term: string, definition: string}>, study_questions: string[], further_review: string[]}
+     */
+    public function extractLearnerNotes(string $transcript, array $profile): array
+    {
+        $empty = ['key_points' => [], 'definitions' => [], 'study_questions' => [], 'further_review' => []];
+
+        if (trim($transcript) === '' || $this->apiKey === '') {
+            return $empty;
+        }
+
+        $knowledgeLevel = (string) ($profile['knowledge_level'] ?? 'intermediate');
+        $weakTopics     = implode(', ', array_map('strval', $profile['weak_topics'] ?? [])) ?: 'none';
+        $profileHash    = md5(serialize([$knowledgeLevel, $weakTopics]));
+        $cacheKey       = 'video-notes:' . md5($transcript) . ':' . $profileHash;
+
+        $cached = Cache::remember($cacheKey, now()->addHours(24), function () use ($transcript, $knowledgeLevel, $weakTopics): array {
+            $prompt = <<<TXT
+Extract structured learning notes from the educational video transcript below.
+
+Return JSON only — no preamble, no markdown fences:
+{
+  "key_points": ["<concise bullet>", ...],
+  "definitions": [{"term": "<term>", "definition": "<plain-English definition>"}, ...],
+  "study_questions": ["<question>", ...],
+  "further_review": ["<topic to revisit>", ...]
+}
+
+Rules:
+- key_points: 5-7 most important teaching points from the transcript.
+- definitions: domain terms defined or heavily used in the video (max 6).
+- study_questions: 3-5 questions a learner with knowledge_level "{$knowledgeLevel}" should be able to answer after watching.
+- further_review: topics where more study is needed, especially if the learner's weak topics ({$weakTopics}) overlap with the video content.
+- Do not invent content not present in the transcript.
+
+TRANSCRIPT:
+{$transcript}
+TXT;
+
+            $raw     = $this->generateText($prompt);
+            $raw     = preg_replace('/```json|```/', '', $raw) ?? '';
+            $decoded = json_decode(trim($raw), true);
+
+            if (! is_array($decoded)) {
+                return ['key_points' => [], 'definitions' => [], 'study_questions' => [], 'further_review' => []];
+            }
+
+            return [
+                'key_points'      => array_values(array_filter(array_map('strval', (array) ($decoded['key_points'] ?? [])))),
+                'definitions'     => array_values(array_filter(
+                    (array) ($decoded['definitions'] ?? []),
+                    fn ($d) => is_array($d) && isset($d['term'], $d['definition']),
+                )),
+                'study_questions' => array_values(array_filter(array_map('strval', (array) ($decoded['study_questions'] ?? [])))),
+                'further_review'  => array_values(array_filter(array_map('strval', (array) ($decoded['further_review'] ?? [])))),
+            ];
+        });
+
+        return is_array($cached) ? $cached : $empty;
+    }
+
+    /**
+     * @param  array{course_name?: string|null, activity_name?: string|null, section_name?: string|null}  $context
+     * @return array{is_relevant: bool, confidence: float, reason: string}
+     */
     public function assessCourseRelevance(string $extractedText, array $context): array
     {
         $courseName = trim((string) ($context['course_name'] ?? ''));

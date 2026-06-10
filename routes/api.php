@@ -652,6 +652,7 @@ Route::middleware('auth:sanctum')->prefix('sessions')->group(function () {
     // AI features
     Route::get('/{id}/transcript', [SessionController::class, 'getTranscript']);
     Route::get('/{id}/summary', [SessionController::class, 'getSummary']);
+    Route::get('/{id}/personalized-summary', [SessionController::class, 'getPersonalizedSummary']);
     Route::post('/{id}/ask-ai', [SessionController::class, 'askAI']);
 
     // Participant lifecycle tracking
@@ -756,6 +757,7 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
         Route::get('content-chunks/{contentId}', [AdaptiveContentController::class, 'chunks']);
         Route::get('activities/{activityId}/adaptive-chunks', [AdaptiveContentController::class, 'activityChunks']);
         Route::post('activities/{activityId}/prepare-adaptation', [AdaptiveContentController::class, 'prepareActivity']);
+        Route::get('activities/{activityId}/video-learning-support', [AdaptiveContentController::class, 'videoLearningSupport']);
         Route::get('content/{chunkId}', [AdaptiveContentController::class, 'show']);
         Route::post('adaptation/{adaptationId}/feedback', [AdaptiveContentController::class, 'feedback']);
         Route::post('{studentId}/recalculate-profile', [AdaptiveContentController::class, 'recalculateProfile']);

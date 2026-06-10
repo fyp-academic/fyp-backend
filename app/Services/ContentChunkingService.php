@@ -3,10 +3,145 @@
 namespace App\Services;
 
 use App\Models\ContentChunk;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 class ContentChunkingService
 {
+    private const VALID_ROLES = ['introduction', 'concept', 'example', 'activity', 'summary'];
+
+    /**
+     * Chunk content and enrich each chunk with AI-classified semantic role, key terms,
+     * and lesson position. Falls back to the plain chunk() path if AI is unavailable.
+     *
+     * @return array Array of chunk IDs
+     */
+    public function chunkWithSemantics(
+        string $contentId,
+        string $contentText,
+        string $contentType = 'lecture',
+        string $contentSource = 'lesson_page',
+        bool $classifyWithAi = true,
+    ): array {
+        $chunkIds = $this->chunk($contentId, $contentText, $contentType, $contentSource);
+
+        if (! $classifyWithAi) {
+            return $chunkIds;
+        }
+
+        $apiKey = (string) (config('services.gemini.api_key') ?? '');
+        if ($apiKey === '') {
+            return $chunkIds;
+        }
+
+        $chunks = ContentChunk::where('content_id', $contentId)
+            ->where('content_source', $contentSource)
+            ->orderBy('chunk_index')
+            ->get(['id', 'chunk_index', 'chunk_text']);
+
+        if ($chunks->isEmpty()) {
+            return $chunkIds;
+        }
+
+        $classifications = $this->classifyChunks($chunks->toArray(), $apiKey);
+        $total = $chunks->count();
+
+        foreach ($chunks as $chunk) {
+            $cl = $classifications[$chunk->chunk_index] ?? [];
+            $role = in_array($cl['semantic_role'] ?? '', self::VALID_ROLES, true)
+                ? $cl['semantic_role']
+                : 'concept';
+            $keyTerms = array_values(array_filter(
+                array_map('strval', (array) ($cl['key_terms'] ?? [])),
+                fn ($t) => trim($t) !== '',
+            ));
+            $positionPct = (int) round(($chunk->chunk_index / max(1, $total - 1)) * 100);
+
+            $chunk->update([
+                'semantic_role'        => $role,
+                'key_terms'            => $keyTerms,
+                'lesson_position_pct'  => $positionPct,
+            ]);
+        }
+
+        return $chunkIds;
+    }
+
+    /**
+     * Send a single Gemini batch call to classify all chunks at once.
+     *
+     * @param  array<int, array{chunk_index: int, chunk_text: string}>  $chunks
+     * @return array<int, array{semantic_role: string, key_terms: string[]}>  keyed by chunk_index
+     */
+    private function classifyChunks(array $chunks, string $apiKey): array
+    {
+        $model = (string) (config('services.gemini.model') ?? 'gemini-2.5-flash');
+        $baseUrl = rtrim((string) (config('services.gemini.base_url') ?? 'https://generativelanguage.googleapis.com/v1beta'), '/');
+
+        $chunkList = '';
+        foreach ($chunks as $c) {
+            $idx = (int) $c['chunk_index'];
+            $preview = mb_substr(strip_tags((string) $c['chunk_text']), 0, 300);
+            $chunkList .= "CHUNK {$idx}:\n{$preview}\n\n";
+        }
+
+        $prompt = <<<TXT
+Classify each educational content chunk below.
+
+Return a JSON array ONLY — no preamble, no markdown fences.
+
+Each element: {"chunk_index": <int>, "semantic_role": "<role>", "key_terms": ["<term>", ...]}
+
+Allowed roles: introduction, concept, example, activity, summary
+- introduction: opening context or objectives
+- concept: core theoretical or factual content
+- example: worked examples, illustrations, case studies
+- activity: exercises, questions, tasks for the learner
+- summary: closing recap or key takeaways
+
+key_terms: up to 5 important domain terms introduced or defined in that chunk. Empty array if none.
+
+CHUNKS:
+{$chunkList}
+TXT;
+
+        try {
+            $url = "{$baseUrl}/models/{$model}:generateContent?key={$apiKey}";
+            $response = Http::timeout(45)->withHeaders(['Content-Type' => 'application/json'])->post($url, [
+                'contents' => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
+                'generationConfig' => ['temperature' => 0.1, 'maxOutputTokens' => 1500],
+                'systemInstruction' => ['parts' => [['text' => 'You classify educational content chunks. Return JSON array only.']]],
+            ]);
+
+            if (! $response->successful()) {
+                Log::warning('ContentChunkingService: Gemini classification failed', ['status' => $response->status()]);
+                return [];
+            }
+
+            $raw = $response->json('candidates.0.content.parts.0.text', '');
+            $raw = preg_replace('/```json|```/', '', (string) $raw) ?? '';
+            $decoded = json_decode(trim($raw), true);
+
+            if (! is_array($decoded)) {
+                Log::warning('ContentChunkingService: classification response not valid JSON', ['raw' => substr($raw, 0, 200)]);
+                return [];
+            }
+
+            $result = [];
+            foreach ($decoded as $item) {
+                if (isset($item['chunk_index'])) {
+                    $result[(int) $item['chunk_index']] = $item;
+                }
+            }
+
+            return $result;
+        } catch (\Throwable $e) {
+            Log::warning('ContentChunkingService: classification exception', ['error' => $e->getMessage()]);
+            return [];
+        }
+    }
+
     /**
      * Split content into semantic chunks and persist them.
      *
