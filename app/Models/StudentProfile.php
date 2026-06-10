@@ -12,6 +12,9 @@ class StudentProfile extends Model
 
     protected $table = 'student_profiles';
 
+    // Table was created with only updated_at, not created_at
+    public const CREATED_AT = null;
+
     protected $fillable = [
         'id', 'student_id', 'pace', 'quiz_average', 'weak_topics',
         'preferred_modality', 'completion_rate', 'profile_hash',
