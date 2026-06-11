@@ -13,6 +13,7 @@ use App\Models\QuizAttempt;
 use App\Models\QuizAttemptResponse;
 use App\Models\Course;
 use App\Models\CognitiveSignal;
+use App\Jobs\RecalculateProfileJob;
 use App\Services\NotificationService;
 use App\Services\EngagementComputationService;
 use App\Services\QuestionTypes\QuestionTypeHandlerFactory;
@@ -519,6 +520,10 @@ class QuizController extends Controller
         } catch (\Throwable $e) {
             Log::warning('Engagement: failed to log quiz_submit', ['attempt' => $attempt->id, 'error' => $e->getMessage()]);
         }
+
+        // Recalculate learner profile now that new quiz data exists.
+        // Delayed 5 s to ensure the attempt row is fully committed before the job reads it.
+        RecalculateProfileJob::dispatch($user->id)->delay(now()->addSeconds(5));
 
         // Notify instructor of quiz submission
         try {

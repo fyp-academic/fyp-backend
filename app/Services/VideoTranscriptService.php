@@ -31,7 +31,7 @@ class VideoTranscriptService
             return '';
         }
 
-        return Cache::remember(
+        return Cache::store('file')->remember(
             'video-transcript:youtube:' . md5($normalizedUrl),
             now()->addHours(24),
             function () use ($normalizedUrl, $fallbackTitle): string {
@@ -78,7 +78,7 @@ TXT;
         $size = (int) (filesize($absolutePath) ?: 0);
         $cacheKey = 'video-transcript:local:' . md5($absolutePath . '|' . $size . '|' . filemtime($absolutePath));
 
-        return Cache::remember($cacheKey, now()->addHours(24), function () use ($absolutePath, $size, $publicUrl, $title): string {
+        return Cache::store('file')->remember($cacheKey, now()->addHours(24), function () use ($absolutePath, $size, $publicUrl, $title): string {
             $filename = basename($absolutePath);
 
             if ($this->apiKey === '') {
@@ -150,7 +150,7 @@ TXT;
         $profileHash    = md5(serialize([$knowledgeLevel, $modality]));
         $cacheKey       = 'video-summary:' . md5($transcript) . ':' . $profileHash;
 
-        return Cache::remember($cacheKey, now()->addHours(24), function () use ($transcript, $knowledgeLevel, $modality): string {
+        return Cache::store('file')->remember($cacheKey, now()->addHours(24), function () use ($transcript, $knowledgeLevel, $modality): string {
             $preamble = $knowledgeLevel === 'novice'
                 ? 'Begin with a short "What you need to know first" section (2-3 sentences) covering any prerequisite concepts mentioned in the video.'
                 : '';
@@ -201,7 +201,7 @@ TXT;
         $profileHash    = md5(serialize([$knowledgeLevel, $weakTopics]));
         $cacheKey       = 'video-notes:' . md5($transcript) . ':' . $profileHash;
 
-        $cached = Cache::remember($cacheKey, now()->addHours(24), function () use ($transcript, $knowledgeLevel, $weakTopics): array {
+        $cached = Cache::store('file')->remember($cacheKey, now()->addHours(24), function () use ($transcript, $knowledgeLevel, $weakTopics): array {
             $prompt = <<<TXT
 Extract structured learning notes from the educational video transcript below.
 

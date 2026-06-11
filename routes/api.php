@@ -35,6 +35,7 @@ use App\Http\Controllers\VideoController;
 use App\Http\Controllers\FileController;
 use App\Http\Controllers\AiTutorController;
 use App\Http\Controllers\EngagementController;
+use App\Http\Controllers\AiQuizController;
 use App\Http\Controllers\InstructorAdaptationController;
 use App\Http\Controllers\InstructorEngagementController;
 use App\Http\Controllers\Student\AdaptiveContentController;
@@ -191,6 +192,12 @@ Route::prefix('v1')->group(function () {
             // Grades (nested under course)
             Route::get('/{id}/grades',                            [GradeController::class, 'index']);
             Route::get('/{id}/grades/student/{studentId}',        [GradeController::class, 'studentGrades']);
+
+            // AI Quiz Generator (nested under course)
+            Route::prefix('/{id}/ai-quiz')->group(function () {
+                Route::post('generate', [AiQuizController::class, 'generate']);
+                Route::post('publish',  [AiQuizController::class, 'publish']);
+            });
 
             // AI Insights (nested under course)
             Route::prefix('/{id}/ai')->group(function () {

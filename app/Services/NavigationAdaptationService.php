@@ -205,7 +205,7 @@ class NavigationAdaptationService
         $cacheKey = "nav-guidance:{$studentId}:{$courseId}:{$profileHash}";
 
         try {
-            $cached = Cache::store('redis')->get($cacheKey);
+            $cached = Cache::store('file')->get($cacheKey);
             if (is_array($cached)) {
                 return $cached;
             }
@@ -316,7 +316,7 @@ TXT;
             ];
 
             try {
-                Cache::store('redis')->put($cacheKey, $result, now()->addMinutes(15));
+                Cache::store('file')->put($cacheKey, $result, now()->addMinutes(15));
             } catch (\Throwable) {}
 
             return $result;

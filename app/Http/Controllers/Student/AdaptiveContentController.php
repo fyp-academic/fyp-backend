@@ -78,6 +78,45 @@ class AdaptiveContentController extends Controller
                         ->where('content_source', $source)
                         ->orderBy('chunk_index')
                         ->get(['id', 'chunk_index', 'chunk_text', 'chunk_type', 'content_source']);
+
+                    // Generate and persist lesson context summary now (deferred from show() to avoid
+                    // a second Gemini call per chunk request later)
+                    if ($page->ai_context_summary === null || $page->context_summary_at === null) {
+                        $plainText = trim(mb_substr(
+                            preg_replace('/\s+/', ' ', strip_tags($chunkSource)) ?? '',
+                            0,
+                            4000
+                        ));
+                        if ($plainText !== '') {
+                            $summary = $this->generateLessonSummary($plainText);
+                            if ($summary !== '') {
+                                $page->ai_context_summary = $summary;
+                                $page->context_summary_at = now();
+                                try { $page->save(); } catch (\Throwable) {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Safety net: if chunks exist but summary was never generated (e.g. upgraded from older version),
+        // generate it now so show() never needs to call Gemini for lesson context.
+        if ($source === 'lesson_page' && ! $chunks->isEmpty()) {
+            $pageForCtx = LessonPage::find($contentId);
+            if ($pageForCtx && $pageForCtx->ai_context_summary === null) {
+                $rawPlain = trim(mb_substr(
+                    preg_replace('/\s+/', ' ', strip_tags($pageForCtx->content ?? '')) ?? '',
+                    0,
+                    4000
+                ));
+                if ($rawPlain !== '') {
+                    $ctxSummary = $this->generateLessonSummary($rawPlain);
+                    if ($ctxSummary !== '') {
+                        $pageForCtx->ai_context_summary = $ctxSummary;
+                        $pageForCtx->context_summary_at = now();
+                        try { $pageForCtx->save(); } catch (\Throwable) {}
+                    }
                 }
             }
         }
@@ -210,10 +249,15 @@ class AdaptiveContentController extends Controller
             ]))),
         ]);
 
+        $mode = $this->presentationService->selectMode(array_merge($contentProfile, [
+            'student_id' => $student->id,
+            'course_id'  => $courseId,
+        ]));
         $presentationConfig = $this->presentationService->resolve(
             $contentProfile,
             $student,
             null,
+            $mode,
         );
 
         // Allow modality override from query param
@@ -255,13 +299,8 @@ class AdaptiveContentController extends Controller
         // Build cache key
         $cacheKey = "adapt:{$student->id}:{$chunkId}:{$profileHash}";
 
-        // Check Redis cache (gracefully degrade if Redis is unavailable)
-        $cachedPayload = null;
-        try {
-            $cachedPayload = Cache::store('redis')->get($cacheKey);
-        } catch (\Throwable $e) {
-            Log::warning('Redis cache get failed', ['error' => $e->getMessage()]);
-        }
+        // Check file cache for previously adapted payload
+        $cachedPayload = $this->fileCacheGet($cacheKey);
         if (is_array($cachedPayload) && isset($cachedPayload['adapted_text'])) {
             return response()->json(array_merge($cachedPayload, [
                 'cached' => true,
@@ -365,11 +404,7 @@ class AdaptiveContentController extends Controller
             ],
         );
 
-        try {
-            Cache::store('redis')->put($cacheKey, $payload, now()->addSeconds(86400));
-        } catch (\Throwable $e) {
-            Log::warning('Redis cache store failed', ['error' => $e->getMessage()]);
-        }
+        $this->fileCachePut($cacheKey, $payload, now()->addSeconds(86400));
 
         return response()->json($payload);
     }
@@ -582,40 +617,7 @@ class AdaptiveContentController extends Controller
             return [];
         }
 
-        // Generate/refresh lesson context summary when stale (> 48 h) or missing
-        $needsSummary = $page->ai_context_summary === null
-            || $page->context_summary_at === null
-            || $page->context_summary_at->diffInHours(now()) > 48;
-
-        if ($needsSummary) {
-            $redisCacheKey = "lesson-ctx:{$page->id}";
-            $summaryFromRedis = null;
-            try {
-                $summaryFromRedis = Cache::store('redis')->get($redisCacheKey);
-            } catch (\Throwable) {}
-
-            if (is_string($summaryFromRedis) && $summaryFromRedis !== '') {
-                $page->ai_context_summary = $summaryFromRedis;
-            } else {
-                $plainText = strip_tags($page->content ?? '');
-                $plainText = mb_substr(preg_replace('/\s+/', ' ', $plainText) ?? '', 0, 4000);
-
-                if (trim($plainText) !== '') {
-                    $generated = $this->generateLessonSummary($plainText);
-
-                    if ($generated !== '') {
-                        $page->ai_context_summary = $generated;
-                        $page->context_summary_at = now();
-                        $page->save();
-
-                        try {
-                            Cache::store('redis')->put($redisCacheKey, $generated, now()->addHours(48));
-                        } catch (\Throwable) {}
-                    }
-                }
-            }
-        }
-
+        // Summary is generated in chunks() on first load and persisted to DB — just read it here.
         // Collect key_terms from prior chunks to prevent re-introduction
         $priorTerms = ContentChunk::where('content_id', $chunk->content_id)
             ->where('content_source', 'lesson_page')
@@ -676,12 +678,10 @@ class AdaptiveContentController extends Controller
         $cacheKey = "video-support:{$activityId}:{$student->id}:{$profileHash}";
 
         // Return cached response when available
-        try {
-            $cached = Cache::store('redis')->get($cacheKey);
-            if (is_array($cached)) {
-                return response()->json(array_merge($cached, ['cached' => true]));
-            }
-        } catch (\Throwable) {}
+        $cached = $this->fileCacheGet($cacheKey);
+        if (is_array($cached)) {
+            return response()->json(array_merge($cached, ['cached' => true]));
+        }
 
         // Resolve transcript
         $transcript = '';
@@ -731,11 +731,25 @@ class AdaptiveContentController extends Controller
             'cached' => false,
         ];
 
-        try {
-            Cache::store('redis')->put($cacheKey, $payload, now()->addHours(12));
-        } catch (\Throwable) {}
+        $this->fileCachePut($cacheKey, $payload, now()->addHours(12));
 
         return response()->json($payload);
+    }
+
+    private function fileCacheGet(string $key): mixed
+    {
+        try {
+            return Cache::store('file')->get($key);
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
+    private function fileCachePut(string $key, mixed $value, \DateTimeInterface $ttl): void
+    {
+        try {
+            Cache::store('file')->put($key, $value, $ttl);
+        } catch (\Throwable) {}
     }
 
     /**

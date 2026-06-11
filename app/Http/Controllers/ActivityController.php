@@ -12,6 +12,7 @@ use App\Models\Activity;
 use App\Models\Enrollment;
 use App\Models\UserActivityCompletion;
 use App\Models\Notification;
+use App\Jobs\RecalculateProfileJob;
 use App\Services\NotificationService;
 use App\Services\EngagementComputationService;
 use App\Traits\TimeEnforcementHelper;
@@ -273,6 +274,9 @@ class ActivityController extends Controller
             $enrollment->last_access = now();
             $enrollment->save();
         }
+
+        // Recalculate learner profile: completion_rate and weak_topics are now stale.
+        RecalculateProfileJob::dispatch($user->id)->delay(now()->addSeconds(3));
 
         // Engagement: log completion event and touch learning streak
         try {

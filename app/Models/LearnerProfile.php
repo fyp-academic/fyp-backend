@@ -11,7 +11,7 @@ class LearnerProfile extends Model
     protected $keyType   = 'string';
 
     protected $fillable = [
-        'id', 'learner_id', 'course_id', 'primary_profile', 'secondary_profile',
+        'id', 'learner_id', 'course_id', 'primary_profile', 'adaptation_mode_override', 'secondary_profile',
         'is_mixed_profile', 'mixed_blend_primary', 'mixed_blend_secondary',
         'h_score', 'a_score', 't_score', 'c_score', 'declared_preferences',
         'lms_flags', 'pulse_consent', 'pulse_consent_at', 'drift_flag',

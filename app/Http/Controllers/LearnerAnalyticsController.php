@@ -38,14 +38,15 @@ class LearnerAnalyticsController extends Controller
     public function setProfile(Request $request, string $id, string $userId): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'profile_type'         => 'required|string|in:H,A,T,C,mixed',
-            'h_score'              => 'sometimes|numeric|min:0|max:1',
-            'a_score'              => 'sometimes|numeric|min:0|max:1',
-            't_score'              => 'sometimes|numeric|min:0|max:1',
-            'c_score'              => 'sometimes|numeric|min:0|max:1',
-            'declared_preferences' => 'sometimes|array',
-            'lms_flags'            => 'sometimes|array',
-            'pulse_consent'        => 'sometimes|boolean',
+            'profile_type'              => 'required|string|in:H,A,T,C,mixed',
+            'h_score'                   => 'sometimes|numeric|min:0|max:1',
+            'a_score'                   => 'sometimes|numeric|min:0|max:1',
+            't_score'                   => 'sometimes|numeric|min:0|max:1',
+            'c_score'                   => 'sometimes|numeric|min:0|max:1',
+            'declared_preferences'      => 'sometimes|array',
+            'lms_flags'                 => 'sometimes|array',
+            'pulse_consent'             => 'sometimes|boolean',
+            'adaptation_mode_override'  => 'sometimes|nullable|string|in:guided_steps,visual_discovery,deep_focus,narrative_example,standard',
         ]);
 
         if ($validator->fails()) {
@@ -54,19 +55,24 @@ class LearnerAnalyticsController extends Controller
 
         Course::findOrFail($id);
 
+        $updateData = array_merge(
+            ['id' => Str::uuid()->toString()],
+            $request->only([
+                'profile_type', 'h_score', 'a_score', 't_score', 'c_score',
+                'declared_preferences', 'lms_flags', 'pulse_consent',
+            ]),
+            ['primary_profile' => $request->profile_type],
+            ['pulse_consent_at' => $request->input('pulse_consent') ? now() : null],
+        );
+
+        // Allow explicitly clearing the override by passing null
+        if ($request->has('adaptation_mode_override')) {
+            $updateData['adaptation_mode_override'] = $request->input('adaptation_mode_override');
+        }
+
         $profile = LearnerProfile::updateOrCreate(
             ['learner_id' => $userId, 'course_id' => $id],
-            array_merge(
-                ['id' => Str::uuid()->toString()],
-                $request->only([
-                    'profile_type', 'h_score', 'a_score', 't_score', 'c_score',
-                    'declared_preferences', 'lms_flags', 'pulse_consent',
-                ]),
-                [
-                    'primary_profile' => $request->profile_type,
-                    'pulse_consent_at' => $request->input('pulse_consent') ? now() : null,
-                ]
-            )
+            $updateData,
         );
 
         return response()->json(['message' => 'Learner profile saved.', 'data' => $profile]);

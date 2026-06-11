@@ -13,3 +13,6 @@ Schedule::command('notifications:send-digests')->hourly();
 
 // Auto-start and auto-end sessions based on scheduled time + duration
 Schedule::command('sessions:update-statuses')->everyMinute();
+
+// Weekly full profile refresh — catches passive learners who never trigger events
+Schedule::command('profiles:recalculate-all')->weekly()->sundays()->at('02:00');

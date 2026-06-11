@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\LearnerProfile;
 use App\Models\RiskScore;
 use App\Models\User;
 use Illuminate\Support\Facades\Cache;
@@ -24,6 +25,18 @@ class PresentationAdaptationService
      */
     public function selectMode(array $contentProfile, string $contentType = 'lecture'): string
     {
+        // Instructor override always wins — no AI call needed.
+        $studentId = (string) ($contentProfile['student_id'] ?? '');
+        $courseId  = (string) ($contentProfile['course_id'] ?? '');
+        if ($studentId !== '' && $courseId !== '') {
+            $override = LearnerProfile::where('learner_id', $studentId)
+                ->where('course_id', $courseId)
+                ->value('adaptation_mode_override');
+            if (is_string($override) && in_array($override, self::VALID_MODES, true)) {
+                return $override;
+            }
+        }
+
         $apiKey = (string) (config('services.gemini.api_key') ?? '');
         if ($apiKey === '') {
             return $this->deriveModeFallback($contentProfile);
@@ -42,13 +55,12 @@ class PresentationAdaptationService
         $cacheKey = "pres-mode:{$studentId}:{$courseId}:{$profileHash}";
 
         try {
-            $cached = Cache::store('redis')->get($cacheKey);
+            $cached = Cache::store('file')->get($cacheKey);
             if (is_string($cached) && in_array($cached, self::VALID_MODES, true)) {
                 return $cached;
             }
-        } catch (\Throwable) {
-            // Redis unavailable — continue to Gemini call
-        }
+        } catch (\Throwable) {}
+
 
         $knowledgeLevel = $contentProfile['knowledge_level'] ?? 'intermediate';
         $pace           = $contentProfile['pace'] ?? 'medium';
@@ -100,7 +112,7 @@ TXT;
 
                 if (in_array($mode, self::VALID_MODES, true)) {
                     try {
-                        Cache::store('redis')->put($cacheKey, $mode, now()->addMinutes(30));
+                        Cache::store('file')->put($cacheKey, $mode, now()->addMinutes(30));
                     } catch (\Throwable) {}
 
                     return $mode;

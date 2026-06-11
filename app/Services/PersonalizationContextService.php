@@ -150,6 +150,12 @@ class PersonalizationContextService
             $pace = 'slow';
         }
 
+        // When no instructor-set LearnerProfile exists, synthesise a primary_profile
+        // from the student's declared VARK style and pace preference so the AI mode
+        // selector can reach all four player modes from day one without instructor setup.
+        $primaryProfile = $learnerProfile?->primary_profile
+            ?? $this->inferHatcFromUserDeclarations($user);
+
         return [
             'pace' => $pace,
             'quiz_average' => $quizAverage,
@@ -157,7 +163,7 @@ class PersonalizationContextService
             'preferred_modality' => $modality,
             'completion_rate' => $completionRate,
             'knowledge_level' => $knowledgeLevel,
-            'primary_profile' => $learnerProfile?->primary_profile,
+            'primary_profile' => $primaryProfile,
             'declared_preferences' => $learnerProfile?->declared_preferences ?? [],
             'vark_style' => $user?->vark_style,
             'preferred_modes' => $user?->preferred_modes ?? [],
@@ -169,6 +175,41 @@ class PersonalizationContextService
             'at_risk' => in_array($risk?->tier ?? $risk?->risk_tier ?? '', ['ORANGE', 'RED', 'AMBER'], true)
                 || $quizAverage < 50,
         ];
+    }
+
+    /**
+     * Map a student's declared VARK style and pace preference to the closest HATC letter
+     * when no instructor-assessed LearnerProfile exists.
+     *
+     * H (Holistic)  — visual/overview-first learners
+     * A (Analytical)— fast, accelerated learners who prefer depth
+     * T (Thinking)  — guided/methodical learners
+     * C (Caring)    — kinesthetic/example-based/collaborative learners
+     */
+    private function inferHatcFromUserDeclarations(?User $user): ?string
+    {
+        if ($user === null) {
+            return null;
+        }
+
+        $vark  = $user->vark_style ?? '';
+        $pace  = $user->pace_preference ?? '';
+        $modes = (array) ($user->preferred_modes ?? []);
+
+        if ($vark === 'visual' || in_array('multimedia', $modes, true)) {
+            return 'H';
+        }
+        if ($vark === 'kinesthetic' || in_array('classroom', $modes, true) || in_array('live', $modes, true)) {
+            return 'C';
+        }
+        if ($pace === 'accelerated' || in_array('self_paced', $modes, true)) {
+            return 'A';
+        }
+        if ($pace === 'guided' || $vark === 'read_write') {
+            return 'T';
+        }
+
+        return null;
     }
 
     private function weakTopicsForCourse(string $studentId, string $courseId, ?StudentProfile $profile): array

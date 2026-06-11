@@ -276,6 +276,9 @@ class ProfileController extends Controller
         ]));
         $user->save();
 
+        // Refresh StudentProfile so preferred_modality reflects the new declaration immediately
+        \App\Jobs\RecalculateProfileJob::dispatch($user->id)->delay(now()->addSeconds(2));
+
         return response()->json([
             'message' => 'Learning style saved.',
             'data'    => [
