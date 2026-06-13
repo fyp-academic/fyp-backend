@@ -8,9 +8,9 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('session_recordings', function (Blueprint $table) {
+        Schema::create('video_session_recordings', function (Blueprint $table) {
             $table->uuid('id')->primary();
-            $table->foreignUuid('session_id')->constrained('sessions')->onDelete('cascade');
+            $table->foreignUuid('session_id')->constrained('video_sessions')->onDelete('cascade');
             $table->string('s3_key');
             $table->integer('duration')->nullable(); // in seconds
             $table->integer('size')->nullable(); // in bytes
@@ -26,4 +26,6 @@ return new class extends Migration
     {
         Schema::dropIfExists('video_session_recordings');
     }
+    // NOTE: original revision mistakenly created `session_recordings` with an FK to a
+    // non-existent `sessions` table; corrected here to match the SessionRecording model.
 };

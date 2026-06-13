@@ -27,6 +27,12 @@ class NavigationAdaptationService
         ?BehavioralSignal $behavioral,
         array $weakTopics,
     ): array {
+        // Warm-up gate: serve neutral, fully-open navigation (no reordering, locking,
+        // weak-topic emphasis or AI guidance) until personalization is ready.
+        if (($contentProfile['personalization_ready'] ?? true) === false) {
+            return $this->neutralNavigation($courseId, $studentId);
+        }
+
         $lmsFlags = $learnerProfile?->lms_flags ?? [];
         $openNavigation = (bool) ($lmsFlags['open_navigation'] ?? false);
         $structuredPathway = (bool) ($lmsFlags['structured_pathway'] ?? false);
@@ -324,6 +330,63 @@ TXT;
             Log::warning('NavigationAdaptationService: guidance exception', ['error' => $e->getMessage()]);
             return $empty;
         }
+    }
+
+    /**
+     * Neutral navigation used during the personalization warm-up window: every
+     * activity is accessible, nothing is annotated, reordered, or AI-guided.
+     *
+     * @return array<string, mixed>
+     */
+    private function neutralNavigation(string $courseId, string $studentId): array
+    {
+        $activities = $this->orderedActivities($courseId);
+
+        $activityOverlays = [];
+        foreach ($activities as $activity) {
+            $activityOverlays[$activity['id']] = [
+                'accessible' => true,
+                'hidden' => false,
+                'annotation' => null,
+                'annotation_label' => null,
+                'sort_boost' => 0,
+                'is_weak_topic' => false,
+            ];
+        }
+
+        $sectionOverlays = [];
+        $sections = DB::table('sections')
+            ->where('course_id', $courseId)
+            ->orderBy('sort_order')
+            ->get(['id', 'title']);
+        foreach ($sections as $section) {
+            $sectionOverlays[$section->id] = [
+                'is_weak_topic' => false,
+                'sort_boost' => 0,
+                'annotation_label' => null,
+            ];
+        }
+
+        return [
+            'mode' => 'balanced',
+            'allow_non_linear_jump' => true,
+            'enforce_sequence' => false,
+            'navigation_pattern' => 'linear',
+            'direct_guidance' => [
+                'enabled' => false,
+                'message' => null,
+                'suggested_activity_id' => null,
+                'reason' => null,
+                'time_estimate_minutes' => null,
+                'prerequisite_warnings' => [],
+            ],
+            'lesson_page_navigation' => [
+                'allow_page_skip' => true,
+                'show_progress_dots' => true,
+            ],
+            'activity_overlays' => $activityOverlays,
+            'section_overlays' => $sectionOverlays,
+        ];
     }
 
     /** @return list<array{id: string, title: string, section_title: string, sort_order: int}> */

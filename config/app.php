@@ -13,7 +13,7 @@ return [
     |
     */
 
-    'name' => env('APP_NAME', 'Laravel'),
+    'name' => env('APP_NAME', 'APES LMS'),
 
     /*
     |--------------------------------------------------------------------------
@@ -52,7 +52,7 @@ return [
     |
     */
 
-    'url' => env('APP_URL', 'http://localhost'),
+    'url' => env('APP_URL', 'https://api.codagenz.com'),
 
     /*
     |--------------------------------------------------------------------------
@@ -138,4 +138,17 @@ return [
         'store' => env('APP_MAINTENANCE_STORE', 'database'),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | AI Service Configuration
+    |--------------------------------------------------------------------------
+    | This section defines the configuration for the AI service used in the application.
+    | It includes Gemini API key and endpoint URL, which are retrieved from environment variables.
+    | This allows for secure and flexible configuration of the AI service without hardcoding sensitive information in the codebase.
+    */
+    'ai' => [
+        'gemini_api_key' => env('GEMINI_API_KEY'),
+        'gemini_model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
+        'gemini_base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
+    ],
 ];

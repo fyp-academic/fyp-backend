@@ -20,7 +20,15 @@ class AcademicStructureSeeder extends Seeder
         ];
 
         foreach ($colleges as $college) {
-            College::query()->firstOrNew(['code' => $college['code']])->forceFill($college)->save();
+            $model = College::firstOrNew(['code' => $college['code']]);
+            $model->name = $college['name'];
+            $model->description = $college['description'];
+            // Only assign the primary key when creating — never mutate an existing
+            // college's id, which would break degree_programmes.college_id FKs.
+            if (! $model->exists) {
+                $model->id = $college['id'];
+            }
+            $model->save();
         }
 
         $programmes = [
@@ -59,13 +67,15 @@ class AcademicStructureSeeder extends Seeder
         foreach ($programmes as $programme) {
             $college = College::where('code', $programme['college_code'])->first();
             if ($college) {
-                DegreeProgramme::query()->firstOrNew(['code' => $programme['code']])->forceFill([
-                    'id' => Str::uuid()->toString(),
-                    'name' => $programme['name'],
-                    'code' => $programme['code'],
-                    'college_id' => $college->id,
-                    'description' => null,
-                ])->save();
+                $model = DegreeProgramme::firstOrNew(['code' => $programme['code']]);
+                $model->name = $programme['name'];
+                $model->college_id = $college->id;
+                $model->description = null;
+                // Assign a fresh id only on creation; keep existing rows' ids stable.
+                if (! $model->exists) {
+                    $model->id = Str::uuid()->toString();
+                }
+                $model->save();
             }
         }
     }

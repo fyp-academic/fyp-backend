@@ -507,7 +507,7 @@ class QuizController extends Controller
                     'score'         => $totalScore,
                     'max_score'     => $maxScore,
                     'skip_rate'     => $skipRate,
-                    'needs_grading' => $needsGrading,
+                    'needs_grading' => $needsManualGrading,
                 ],
                 loginSessionId: $request->input('login_session_id'),
             );
@@ -542,7 +542,7 @@ class QuizController extends Controller
                     'activity_type' => 'quiz',
                     'attempt_id' => $attempt->id,
                     'course_id' => $course->id,
-                    'needs_grading' => $needsGrading,
+                    'needs_grading' => $needsManualGrading,
                 ],
                 $attempt->id
             );

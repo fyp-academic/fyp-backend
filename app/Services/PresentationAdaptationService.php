@@ -37,6 +37,18 @@ class PresentationAdaptationService
             }
         }
 
+        // Warm-up gate: until the learner has real evidence on this course, serve
+        // neutral delivery. Keeps the AI honest — no profile is fabricated day one.
+        if (($contentProfile['personalization_ready'] ?? true) === false) {
+            return 'standard';
+        }
+
+        // Struggling / novice learners are always given the signaling (guided_steps)
+        // layout, guaranteeing Mayer's Signaling principle regardless of the AI pick.
+        if ($this->isStruggling($contentProfile)) {
+            return 'guided_steps';
+        }
+
         $apiKey = (string) (config('services.gemini.api_key') ?? '');
         if ($apiKey === '') {
             return $this->deriveModeFallback($contentProfile);
@@ -136,6 +148,27 @@ TXT;
      */
     public function resolve(array $contentProfile, ?User $user, ?RiskScore $risk, string $mode = ''): array
     {
+        // Warm-up gate: neutral, inactive presentation until personalization is ready.
+        if (($contentProfile['personalization_ready'] ?? true) === false) {
+            return [
+                'is_active'             => false,
+                'text_density'          => 'comfortable',
+                'font_scale'            => 1.0,
+                'layout_mode'           => 'standard',
+                'line_height'           => 1.65,
+                'content_max_width'     => '48rem',
+                'show_step_numbers'     => false,
+                'visual_emphasis'       => false,
+                'highlight_weak_topics' => false,
+                'color_scheme'          => 'default',
+                'card_variant'          => 'standard',
+                'reading_rail'          => 'default',
+                'typography_class'      => 'personalization-comfortable-standard',
+                'mode'                  => 'standard',
+                'mode_config'           => $this->modeConfig('standard'),
+            ];
+        }
+
         $pace           = $contentProfile['pace'] ?? 'medium';
         $modality       = $contentProfile['preferred_modality'] ?? 'text';
         $knowledgeLevel = $contentProfile['knowledge_level'] ?? 'intermediate';
@@ -280,7 +313,7 @@ TXT;
         $modality       = $contentProfile['preferred_modality'] ?? 'text';
         $hatc           = $contentProfile['primary_profile'] ?? '';
 
-        if ($pace === 'slow' || $knowledgeLevel === 'novice') {
+        if ($pace === 'slow' || $knowledgeLevel === 'novice' || $this->isStruggling($contentProfile)) {
             return 'guided_steps';
         }
         if ($vark === 'visual' || $modality === 'visual') {
@@ -294,5 +327,18 @@ TXT;
         }
 
         return 'standard';
+    }
+
+    /**
+     * A learner is "struggling" when they are flagged at-risk, classed as a novice,
+     * or averaging below 50% — these learners always receive the signaling layout.
+     *
+     * @param  array<string, mixed>  $contentProfile
+     */
+    private function isStruggling(array $contentProfile): bool
+    {
+        return ($contentProfile['at_risk'] ?? false) === true
+            || ($contentProfile['knowledge_level'] ?? '') === 'novice'
+            || (float) ($contentProfile['quiz_average'] ?? 0) < 50;
     }
 }

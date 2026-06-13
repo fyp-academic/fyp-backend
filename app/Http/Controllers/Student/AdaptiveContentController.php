@@ -260,6 +260,23 @@ class AdaptiveContentController extends Controller
             $mode,
         );
 
+        // Warm-up gate: during the cold-start window serve the instructor's original
+        // content unchanged — no AI rewrite and no presentation switch. Keeps the
+        // system honest until there is real evidence about the learner on this course.
+        if (($contentProfile['personalization_ready'] ?? true) === false) {
+            return response()->json($this->deliveryPayload(
+                chunk: $chunk,
+                displayText: $chunk->chunk_text,
+                profile: $profileArray,
+                presentation: $presentationConfig,
+                settings: null,
+                deliveryStatus: 'original_only',
+                contentAdapted: false,
+                presentationActive: false,
+                integrity: ['instructor_content_immutable' => true],
+            ));
+        }
+
         // Allow modality override from query param
         if ($request->has('modality_override')) {
             $override = $request->query('modality_override');
