@@ -122,6 +122,50 @@ class AuthController extends Controller
     }
 
     /**
+     * Map a unique-constraint QueryException to the offending field and a
+     * human-friendly message. Returns null when the error is not a recognised
+     * duplicate-key violation. Matches on the column/index names that appear in
+     * the driver message (works for both MySQL "Duplicate entry ... for key" and
+     * Postgres "duplicate key value violates unique constraint").
+     */
+    private function duplicateFieldFromException(\Illuminate\Database\QueryException $e): ?array
+    {
+        $message = strtolower($e->getMessage());
+
+        // Isolate just the unique-violation clause so we never match against the
+        // INSERT statement's column list (which contains every column name).
+        // MySQL:    Duplicate entry 'x' for key 'users_email_unique'
+        // Postgres: duplicate key value violates unique constraint "users_email_unique"
+        // SQLite:   UNIQUE constraint failed: users.email
+        $clause = null;
+        if (preg_match("/for key '([^']+)'/", $message, $m)) {
+            $clause = $m[1];
+        } elseif (preg_match('/unique constraint "([^"]+)"/', $message, $m)) {
+            $clause = $m[1];
+        } elseif (preg_match('/unique constraint failed:\s*([a-z0-9_.,\s]+)/', $message, $m)) {
+            $clause = $m[1];
+        }
+
+        if ($clause === null) {
+            return null; // Not a unique-key violation we recognise.
+        }
+
+        $map = [
+            'email'               => ['key' => 'email', 'message' => 'That email is already registered.'],
+            'registration_number' => ['key' => 'registration_number', 'message' => 'That registration number is already in use.'],
+            'staff_id'            => ['key' => 'staff_id', 'message' => 'That staff ID already exists.'],
+        ];
+
+        foreach ($map as $needle => $field) {
+            if (str_contains($clause, $needle)) {
+                return $field;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Extract and verify user from Bearer token in Authorization header.
      * Used for admin auto-verify when endpoint is public (no auth middleware).
      */
@@ -176,11 +220,11 @@ class AuthController extends Controller
             'instructor' => [
                 'staff_id'               => 'required|string|max:30|unique:instructors,staff_id',
                 'college_id'             => 'required|string|exists:colleges,id',
-                'gender'                 => 'sometimes|string|in:male,female,other',
+                'gender'                 => 'sometimes|nullable|string|in:male,female,other',
                 'phone_number'           => 'sometimes|nullable|string|max:20',
                 'national_id'            => 'sometimes|nullable|string|max:50',
-                'employment_type'        => 'sometimes|string|in:full-time,part-time,visiting',
-                'academic_rank'          => 'sometimes|string|in:assistant_lecturer,lecturer,senior_lecturer,associate_professor,professor,tutorial_assistant,graduate_assistant',
+                'employment_type'        => 'sometimes|nullable|string|in:full-time,part-time,visiting',
+                'academic_rank'          => 'sometimes|nullable|string|in:assistant_lecturer,lecturer,senior_lecturer,associate_professor,professor,tutorial_assistant,graduate_assistant',
                 'date_of_employment'     => 'sometimes|nullable|date',
                 'highest_qualification'  => 'sometimes|nullable|string|max:100',
                 'field_of_specialization'=> 'sometimes|nullable|string|max:100',
@@ -253,7 +297,7 @@ class AuthController extends Controller
                 'phone_number'            => $request->input('phone_number'),
                 'national_id'             => $request->input('national_id'),
                 'staff_id'                => $request->input('staff_id'),
-                'employment_type'         => $request->input('employment_type', 'full-time'),
+                'employment_type'         => $request->input('employment_type') ?: 'full-time',
                 'academic_rank'           => $request->input('academic_rank'),
                 'college_id'              => $request->input('college_id'),
                 'date_of_employment'      => $request->input('date_of_employment'),
@@ -269,9 +313,15 @@ class AuthController extends Controller
 
             $instructor = Instructor::create($instructorData);
 
-            // Assign degree programmes if provided
-            if ($request->has('assigned_programme_ids')) {
-                $instructor->degreeProgrammes()->attach($request->input('assigned_programme_ids'));
+            // Assign degree programmes if provided. Normalise to a clean array so a
+            // stray empty value can never break the attach (validation already
+            // guarantees each id exists in degree_programmes).
+            $programmeIds = array_values(array_filter(
+                (array) $request->input('assigned_programme_ids', []),
+                static fn ($id) => is_string($id) && $id !== ''
+            ));
+            if (!empty($programmeIds)) {
+                $instructor->degreeProgrammes()->attach($programmeIds);
             }
         }
 
@@ -286,14 +336,43 @@ class AuthController extends Controller
                 'email_verified_at' => now(),
             ])->save();
         } else {
-            // Normal flow: send verification code
-            $this->generateAndSendVerificationCode($user);
+            // Normal flow: send verification code. A mail outage must never roll
+            // back an otherwise-valid account, so failures here are logged and
+            // swallowed — the user can request a fresh code via resend.
+            try {
+                $this->generateAndSendVerificationCode($user);
+            } catch (\Throwable $mailError) {
+                Log::warning('Verification email failed to send during registration', [
+                    'email' => $user->email,
+                    'error' => $mailError->getMessage(),
+                ]);
+            }
         }
 
             DB::commit();
+        } catch (\Illuminate\Database\QueryException $e) {
+            DB::rollBack();
+            Log::error('Registration failed (database error)', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
+
+            // Translate unique-constraint violations into a clear, field-specific
+            // message so the admin knows exactly what to change.
+            $field = $this->duplicateFieldFromException($e);
+            if ($field !== null) {
+                return response()->json(['errors' => [$field['key'] => [$field['message']]]], 422);
+            }
+
+            return response()->json([
+                'message' => 'Failed to create the account. Please try again.',
+            ], 500);
         } catch (\Throwable $e) {
             DB::rollBack();
-            Log::error('Registration failed', ['error' => $e->getMessage()]);
+            Log::error('Registration failed', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString(),
+            ]);
             return response()->json([
                 'message' => 'Failed to create the account. Please try again.',
             ], 500);

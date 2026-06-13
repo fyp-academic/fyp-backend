@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -12,7 +13,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Instructor extends Model
 {
-    use HasFactory;
+    // HasUuids auto-generates the UUID primary key on create. Without it,
+    // Instructor::create() inserts a NULL id and the row is rejected.
+    use HasFactory, HasUuids;
 
     public $incrementing = false;
     protected $keyType = 'string';
