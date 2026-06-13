@@ -29,6 +29,9 @@ class CategoryController extends Controller
      */
     public function store(Request $request): JsonResponse
     {
+        // Treat an empty parent_id as a top-level category.
+        $request->merge(['parent_id' => $request->input('parent_id') ?: null]);
+
         $validator = Validator::make($request->all(), [
             'name'        => 'required|string|max:255',
             'description' => 'sometimes|nullable|string',
@@ -38,6 +41,17 @@ class CategoryController extends Controller
 
         if ($validator->fails()) {
             return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        // Enforce a strict two-level hierarchy: a parent must itself be top-level.
+        if ($request->parent_id) {
+            $parent = Category::find($request->parent_id);
+            if ($parent && $parent->parent_id !== null) {
+                return response()->json([
+                    'message' => 'Categories support only two levels. A subcategory cannot be used as a parent.',
+                    'errors'  => ['parent_id' => ['The selected parent is already a subcategory.']],
+                ], 422);
+            }
         }
 
         $category = Category::create([
@@ -65,6 +79,11 @@ class CategoryController extends Controller
     {
         $category = Category::findOrFail($id);
 
+        // Treat an empty parent_id as a top-level category.
+        if ($request->has('parent_id')) {
+            $request->merge(['parent_id' => $request->input('parent_id') ?: null]);
+        }
+
         $validator = Validator::make($request->all(), [
             'name'        => 'sometimes|string|max:255',
             'description' => 'sometimes|nullable|string',
@@ -74,6 +93,31 @@ class CategoryController extends Controller
 
         if ($validator->fails()) {
             return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        // Enforce the strict two-level hierarchy on re-parenting.
+        if ($request->has('parent_id') && $request->parent_id) {
+            if ($request->parent_id === $id) {
+                return response()->json([
+                    'message' => 'A category cannot be its own parent.',
+                    'errors'  => ['parent_id' => ['A category cannot be its own parent.']],
+                ], 422);
+            }
+
+            $parent = Category::find($request->parent_id);
+            if ($parent && $parent->parent_id !== null) {
+                return response()->json([
+                    'message' => 'Categories support only two levels. A subcategory cannot be used as a parent.',
+                    'errors'  => ['parent_id' => ['The selected parent is already a subcategory.']],
+                ], 422);
+            }
+
+            if ($category->children()->exists()) {
+                return response()->json([
+                    'message' => 'This category has subcategories and must stay top-level.',
+                    'errors'  => ['parent_id' => ['Move or remove its subcategories before nesting it.']],
+                ], 422);
+            }
         }
 
         $oldParentId = $category->parent_id;
