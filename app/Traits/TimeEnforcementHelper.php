@@ -2,6 +2,7 @@
 
 namespace App\Traits;
 
+use App\Models\Activity;
 use Carbon\Carbon;
 
 /**
@@ -62,6 +63,63 @@ trait TimeEnforcementHelper
         ];
     }
     
+    /**
+     * Resolve a quiz activity's effective timing window from its settings.
+     *
+     * Authoring (QuizCreator) stores openDate / closeDate / timeLimit in
+     * activity.settings; this is the single place that reads them (with legacy
+     * fallbacks) so start, submit, and the expiry command all agree. All strings
+     * are parsed with Carbon, i.e. in the app timezone (single-timezone contract).
+     *
+     * @return array{open: ?Carbon, close: ?Carbon, timeLimitMinutes: ?int}
+     */
+    protected function resolveQuizWindow(Activity $activity): array
+    {
+        $settings = $activity->settings ?? [];
+
+        $parse = static function ($value): ?Carbon {
+            if (empty($value)) {
+                return null;
+            }
+            try {
+                return Carbon::parse($value);
+            } catch (\Throwable $e) {
+                return null;
+            }
+        };
+
+        $open  = $parse($settings['openDate'] ?? $settings['start_time'] ?? null);
+        $close = $parse($settings['closeDate'] ?? null);
+        if (!$close && $activity->due_date) {
+            $close = $activity->due_date->copy()->endOfDay();
+        }
+
+        $limit = $settings['timeLimit'] ?? null;
+        $limit = is_numeric($limit) && (int) $limit > 0 ? (int) $limit : null;
+
+        return ['open' => $open, 'close' => $close, 'timeLimitMinutes' => $limit];
+    }
+
+    /**
+     * The hard deadline for an in-progress attempt: the sooner of
+     * (started_at + time limit) and the quiz close time. Null = no deadline.
+     *
+     * @param array{open: ?Carbon, close: ?Carbon, timeLimitMinutes: ?int} $window
+     */
+    protected function quizAttemptDeadline(?Carbon $startedAt, array $window): ?Carbon
+    {
+        $byLimit = ($startedAt && !empty($window['timeLimitMinutes']))
+            ? $startedAt->copy()->addMinutes($window['timeLimitMinutes'])
+            : null;
+        $close = $window['close'] ?? null;
+
+        if ($byLimit && $close) {
+            return $byLimit->lt($close) ? $byLimit : $close;
+        }
+
+        return $byLimit ?: $close;
+    }
+
     /**
      * Get time status for a session.
      * Sessions have scheduled_at (when session should start) and duration (in minutes).

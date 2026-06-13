@@ -230,20 +230,10 @@ class QuizController extends Controller
                 ->where('type', 'quiz')
                 ->firstOrFail();
 
-            // Check time restrictions on the quiz
-            $settings = $activity->settings ?? [];
-            $startTime = isset($settings['start_time']) 
-                ? new \DateTime($settings['start_time']) 
-                : null;
-            $endTime = $activity->due_date ? $activity->due_date->endOfDay() : null;
-            
-            // Convert to Carbon instances if needed
-            if ($startTime && !$startTime instanceof \Carbon\Carbon) {
-                $startTime = \Carbon\Carbon::parse($startTime);
-            }
-            
-            // Check time window
-            $timeStatus = $this->getActivityTimeStatus($startTime, $endTime);
+            // Check time restrictions on the quiz. resolveQuizWindow reads the
+            // openDate/closeDate/timeLimit the instructor actually configured.
+            $window = $this->resolveQuizWindow($activity);
+            $timeStatus = $this->getActivityTimeStatus($window['open'], $window['close']);
             
             if (!$timeStatus['can_attempt']) {
                 $reason = $timeStatus['reason'] ?? 'unknown';
@@ -315,9 +305,16 @@ class QuizController extends Controller
                 Log::warning('Engagement: failed to log quiz_start', ['activity' => $id, 'error' => $engEx->getMessage()]);
             }
 
+            // Authoritative timer: the client counts down to expires_at rather
+            // than trusting its own clock. Deadline = sooner of time-limit and close.
+            $deadline = $this->quizAttemptDeadline($attempt->started_at, $window);
+
             return response()->json([
                 'message' => 'Quiz attempt started.',
                 'data' => $attempt,
+                'expires_at' => $deadline?->toIso8601String(),
+                'time_limit_seconds' => $deadline ? max(0, (int) now()->diffInSeconds($deadline, false)) : null,
+                'server_time' => now()->toIso8601String(),
             ], 201);
         } catch (\Throwable $e) {
             return response()->json([
@@ -372,6 +369,14 @@ class QuizController extends Controller
                 'data' => $attempt,
             ], 422);
         }
+
+        // Resolve the attempt deadline so we can record whether this submission
+        // beat the time limit / close window. Per product decision we still
+        // accept and grade late submissions (auto-submit), only flagging them.
+        $submitActivity = Activity::find($attempt->activity_id);
+        $deadline = $submitActivity
+            ? $this->quizAttemptDeadline($attempt->started_at, $this->resolveQuizWindow($submitActivity))
+            : null;
 
         $validator = Validator::make($request->all(), [
             'responses' => 'required|array',
@@ -474,12 +479,19 @@ class QuizController extends Controller
             }
         }
 
-        // Update attempt with results
+        // Update attempt with results. Record actual elapsed time and flag the
+        // attempt when it landed past the deadline (+30s grace for network lag).
+        $submittedAt = now();
+        $timeSpent = $attempt->started_at ? (int) $attempt->started_at->diffInSeconds($submittedAt) : null;
+        $wasLate = $deadline && $submittedAt->gt($deadline->copy()->addSeconds(30));
+
         $attempt->update([
             'status' => $needsManualGrading ? 'pending_review' : 'submitted',
-            'submitted_at' => now(),
+            'submitted_at' => $submittedAt,
             'score' => $totalScore,
             'max_score' => $maxScore,
+            'time_spent' => $timeSpent,
+            'auto_submitted' => (bool) $wasLate,
         ]);
 
         $percentage = $maxScore > 0 ? round(($totalScore / $maxScore) * 100, 2) : 0;

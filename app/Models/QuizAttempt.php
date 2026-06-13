@@ -16,15 +16,16 @@ class QuizAttempt extends Model
         'id', 'activity_id', 'student_id', 'course_id',
         'status', 'attempt_number', 'started_at', 'submitted_at',
         'graded_at', 'time_spent', 'score', 'max_score',
-        'feedback', 'graded_by',
+        'feedback', 'graded_by', 'auto_submitted',
     ];
 
     protected function casts(): array
     {
         return [
-            'started_at'   => 'datetime',
-            'submitted_at' => 'datetime',
-            'graded_at'    => 'datetime',
+            'started_at'     => 'datetime',
+            'submitted_at'   => 'datetime',
+            'graded_at'      => 'datetime',
+            'auto_submitted' => 'boolean',
         ];
     }
 

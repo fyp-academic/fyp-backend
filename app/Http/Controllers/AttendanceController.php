@@ -9,9 +9,27 @@ use Illuminate\Support\Str;
 use App\Models\Activity;
 use App\Models\AttendanceSession;
 use App\Models\AttendanceLog;
+use App\Traits\TimeEnforcementHelper;
+use Carbon\Carbon;
 
 class AttendanceController extends Controller
 {
+    use TimeEnforcementHelper;
+
+    /**
+     * Derive an attendance session's status from its scheduled time + duration:
+     * scheduled (before start) → open (during) → closed (after). Mirrors how
+     * video sessions auto-manage status so configured times are obeyed.
+     */
+    private function attendanceStatusFor(?Carbon $sessionDate, ?int $durationMinutes): string
+    {
+        if (!$sessionDate) {
+            return 'scheduled';
+        }
+        $status = $this->getSessionTimeStatus($sessionDate, $durationMinutes)['status'];
+        return $status === 'active' ? 'open' : $status; // scheduled | open | closed
+    }
+
     /**
      * GET /api/v1/activities/{id}/attendance-sessions
      * List all sessions for an attendance activity.
@@ -23,6 +41,12 @@ class AttendanceController extends Controller
             ->withCount('logs')
             ->orderBy('session_date', 'desc')
             ->get();
+
+        // Reflect the time-derived status so the UI always shows reality even
+        // between scheduler runs (does not persist here; the command does).
+        $sessions->each(function (AttendanceSession $s) {
+            $s->status = $this->attendanceStatusFor($s->session_date, $s->duration_minutes);
+        });
 
         return response()->json(['data' => $sessions, 'activity_id' => $id]);
     }
@@ -46,15 +70,18 @@ class AttendanceController extends Controller
 
         $activity = Activity::findOrFail($id);
 
+        $sessionDate = Carbon::parse($request->session_date);
+        $duration    = (int) $request->input('duration_minutes', 60);
+
         $session = AttendanceSession::create([
             'id'               => Str::uuid()->toString(),
             'activity_id'      => $id,
             'course_id'        => $activity->course_id,
             'title'            => $request->title,
             'description'      => $request->input('description'),
-            'session_date'     => $request->session_date,
-            'duration_minutes' => $request->input('duration_minutes', 60),
-            'status'           => 'open',
+            'session_date'     => $sessionDate,
+            'duration_minutes' => $duration,
+            'status'           => $this->attendanceStatusFor($sessionDate, $duration),
         ]);
 
         return response()->json(['message' => 'Session created.', 'data' => $session], 201);
