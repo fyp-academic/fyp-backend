@@ -247,6 +247,22 @@ class CourseController extends Controller
             'tags'          => 'sometimes|array',
             'max_students'  => 'sometimes|nullable|integer|min:1',
             'image'         => 'sometimes|nullable|string',
+            // Course-settings fields
+            'id_number'             => 'sometimes|nullable|string|max:255',
+            'summary'               => 'sometimes|nullable|string',
+            'group_mode'            => 'sometimes|nullable|string|max:20',
+            'self_enrollment'       => 'sometimes|boolean',
+            'enrollment_key'        => 'sometimes|nullable|string|max:255',
+            'enrollment_start_date' => 'sometimes|nullable|date',
+            'enrollment_end_date'   => 'sometimes|nullable|date',
+            'grade_display_type'    => 'sometimes|nullable|string|max:20',
+            'grade_passing_grade'   => 'sometimes|nullable|integer|min:0|max:100',
+            'completion_tracking'   => 'sometimes|boolean',
+            'max_upload_size'       => 'sometimes|nullable|integer|min:0',
+            'allowed_file_types'    => 'sometimes|nullable|string|max:255',
+            'show_gradebook'        => 'sometimes|boolean',
+            'show_activity_reports' => 'sometimes|boolean',
+            'force_download'        => 'sometimes|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -281,7 +297,12 @@ class CourseController extends Controller
             'tags'              => $request->input('tags', []),
             'max_students'      => $request->input('max_students'),
             'image'             => $request->input('image'),
-        ]);
+        ] + $request->only([
+            'id_number', 'summary', 'group_mode', 'self_enrollment', 'enrollment_key',
+            'enrollment_start_date', 'enrollment_end_date', 'grade_display_type',
+            'grade_passing_grade', 'completion_tracking', 'max_upload_size',
+            'allowed_file_types', 'show_gradebook', 'show_activity_reports', 'force_download',
+        ]));
 
         if ($request->has('degree_programme_ids')) {
             $course->degreeProgrammes()->sync($request->degree_programme_ids);
@@ -390,6 +411,23 @@ class CourseController extends Controller
             'language'      => 'sometimes|string|max:50',
             'tags'          => 'sometimes|array',
             'max_students'  => 'sometimes|nullable|integer|min:1',
+            'image'         => 'sometimes|nullable|string',
+            // Course-settings fields
+            'id_number'             => 'sometimes|nullable|string|max:255',
+            'summary'               => 'sometimes|nullable|string',
+            'group_mode'            => 'sometimes|nullable|string|max:20',
+            'self_enrollment'       => 'sometimes|boolean',
+            'enrollment_key'        => 'sometimes|nullable|string|max:255',
+            'enrollment_start_date' => 'sometimes|nullable|date',
+            'enrollment_end_date'   => 'sometimes|nullable|date',
+            'grade_display_type'    => 'sometimes|nullable|string|max:20',
+            'grade_passing_grade'   => 'sometimes|nullable|integer|min:0|max:100',
+            'completion_tracking'   => 'sometimes|boolean',
+            'max_upload_size'       => 'sometimes|nullable|integer|min:0',
+            'allowed_file_types'    => 'sometimes|nullable|string|max:255',
+            'show_gradebook'        => 'sometimes|boolean',
+            'show_activity_reports' => 'sometimes|boolean',
+            'force_download'        => 'sometimes|boolean',
         ]);
 
         if ($validator->fails()) {
@@ -398,7 +436,11 @@ class CourseController extends Controller
 
         $data = $request->only([
             'name', 'short_name', 'description', 'category_id', 'college_id', 'format',
-            'status', 'visibility', 'start_date', 'end_date', 'language', 'tags', 'max_students',
+            'status', 'visibility', 'start_date', 'end_date', 'language', 'tags', 'max_students', 'image',
+            'id_number', 'summary', 'group_mode', 'self_enrollment', 'enrollment_key',
+            'enrollment_start_date', 'enrollment_end_date', 'grade_display_type',
+            'grade_passing_grade', 'completion_tracking', 'max_upload_size',
+            'allowed_file_types', 'show_gradebook', 'show_activity_reports', 'force_download',
         ]);
 
         if (isset($data['category_id'])) {

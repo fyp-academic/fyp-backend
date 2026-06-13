@@ -37,6 +37,9 @@ class ProfileController extends Controller
             $profileData['college'] = $user->instructor->college;
             $profileData['college_code'] = $user->instructor->college?->code;
             $profileData['total_students'] = $user->instructor->totalStudents();
+            // Bio may live on the instructor profile (set at account creation) while
+            // the page reads top-level bio — surface it so "About Me" isn't blank.
+            $profileData['bio'] = $user->bio ?: $user->instructor->bio;
         } elseif ($user->role === 'student') {
             $profileData['degree_programme'] = $user->degreeProgramme;
             if ($user->degreeProgramme) {
