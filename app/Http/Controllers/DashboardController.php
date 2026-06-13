@@ -18,6 +18,7 @@ use App\Models\LearnerLoginSession;
 use App\Models\LearnerActivityEvent;
 use App\Models\EngagementScore;
 use App\Models\LearningStreak;
+use App\Models\ForumPost;
 use App\Policies\RolePolicy;
 
 class DashboardController extends Controller
@@ -165,6 +166,10 @@ class DashboardController extends Controller
                     'active_courses' => 0,
                     'total_enrollments' => 0,
                     'total_students' => 0,
+                    'pending_grading' => 0,
+                    'upcoming_deadlines' => 0,
+                    'new_enrollments' => 0,
+                    'forum_posts' => 0,
                 ],
                 'permissions' => [
                     'can_manage_colleges' => false,
@@ -227,6 +232,22 @@ class DashboardController extends Controller
             ->whereIn('status', ['submitted', 'not_submitted'])
             ->count();
 
+        // Quick-stat metrics for the dashboard cards.
+        $upcomingDeadlines = Activity::whereIn('course_id', $courseIds)
+            ->whereNotNull('due_date')
+            ->whereBetween('due_date', [now(), now()->addDays(7)])
+            ->count();
+
+        $newEnrollments = Enrollment::whereIn('course_id', $courseIds)
+            ->where('role', 'student')
+            ->where('created_at', '>=', now()->subDays(7))
+            ->count();
+
+        $forumPosts = ForumPost::where('created_at', '>=', now()->subDays(7))
+            ->where('user_id', '!=', $user->id)
+            ->whereHas('discussion', fn ($q) => $q->whereIn('course_id', $courseIds))
+            ->count();
+
         // Notifications
         $notifications = NotificationModel::where('user_id', $user->id)
             ->orderByRaw("CASE WHEN read_at IS NULL THEN 0 ELSE 1 END")
@@ -243,6 +264,10 @@ class DashboardController extends Controller
                 'total_enrollments' => $totalEnrollments,
                 'total_students' => $students->count(),
                 'pending_grading_count' => $pendingGrades,
+                'pending_grading' => $pendingGrades,
+                'upcoming_deadlines' => $upcomingDeadlines,
+                'new_enrollments' => $newEnrollments,
+                'forum_posts' => $forumPosts,
             ],
             'assigned_programmes' => $assignedProgrammes,
             'my_courses' => $courses,
