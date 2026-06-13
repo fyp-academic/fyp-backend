@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use App\Models\User;
 use App\Models\Instructor;
 use App\Policies\RolePolicy;
+use Illuminate\Support\Facades\DB;
 
 class UserController extends Controller
 {
@@ -355,24 +356,29 @@ class UserController extends Controller
             return response()->json(['message' => 'Forbidden. Only admins can delete instructors.'], 403);
         }
 
-        $instructor = Instructor::where('user_id', $id)->firstOrFail();
-        $targetUser = $instructor->user;
+        // Resolve by the user record (source of truth). The instructor profile is
+        // optional — some instructor users may lack a row in the instructors table.
+        $targetUser = User::find($id);
+        if (!$targetUser) {
+            return response()->json(['message' => 'Instructor not found.'], 404);
+        }
 
         // Prevent self-deletion
-        if ($targetUser && $targetUser->id === $user->id) {
+        if ($targetUser->id === $user->id) {
             return response()->json(['message' => 'Cannot delete your own account.'], 422);
         }
 
-        // Detach programmes
-        $instructor->degreeProgrammes()->detach();
+        DB::transaction(function () use ($id, $targetUser) {
+            $instructor = Instructor::where('user_id', $id)->first();
+            if ($instructor) {
+                $instructor->degreeProgrammes()->detach();
+                $instructor->delete();
+            }
 
-        // Delete instructor profile
-        $instructor->delete();
-
-        // Delete user
-        if ($targetUser) {
+            // Deleting the user cascades any remaining instructor profile and
+            // programme pivots, and nulls course instructor_id (per FK rules).
             $targetUser->delete();
-        }
+        });
 
         return response()->json(['message' => 'Instructor deleted successfully.']);
     }
