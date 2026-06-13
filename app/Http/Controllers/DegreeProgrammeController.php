@@ -18,7 +18,11 @@ class DegreeProgrammeController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
-        $user = $request->user();
+        // This route is public (so the admin user-creation form and pre-auth
+        // screens can list programmes), so $request->user() is null even when a
+        // Bearer token is sent. Resolve the token optionally via the sanctum
+        // guard so an authenticated instructor gets scoped to their programmes.
+        $user = $request->user() ?: \Illuminate\Support\Facades\Auth::guard('sanctum')->user();
         $query = DegreeProgramme::with('college');
 
         // Apply role-based filtering only if authenticated
