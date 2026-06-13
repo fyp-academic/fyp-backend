@@ -235,6 +235,11 @@ class AuthController extends Controller
             'phone_number'          => $request->input('phone_number'),
         ];
 
+        // Create the account (and instructor profile) atomically so a partial
+        // failure never leaves a half-created user behind.
+        DB::beginTransaction();
+        try {
+
         $user = User::create($userData);
 
         // Create instructor profile if role is instructor
@@ -289,6 +294,15 @@ class AuthController extends Controller
         } else {
             // Normal flow: send verification code
             $this->generateAndSendVerificationCode($user);
+        }
+
+            DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            Log::error('Registration failed', ['error' => $e->getMessage()]);
+            return response()->json([
+                'message' => 'Failed to create the account. Please try again.',
+            ], 500);
         }
 
         $response = [
