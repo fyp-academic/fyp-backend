@@ -43,10 +43,14 @@ class GeminiService
             'options' => $options,
         ]);
         
+        // Multi-turn conversations are unique, so never serve them from cache.
+        $history   = $options['history'] ?? [];
+        $useCache  = ($options['cache'] ?? false) && empty($history);
+
         // Cache identical requests to protect free tier quota
         $cacheKey = 'gemini_' . md5($systemInstruction . $userMessage);
 
-        if ($options['cache'] ?? false) {
+        if ($useCache) {
             if ($cached = Cache::get($cacheKey)) {
                 return $cached;
             }
@@ -74,7 +78,7 @@ class GeminiService
 
             $text = $response->json('candidates.0.content.parts.0.text', '');
 
-            if ($options['cache'] ?? false) {
+            if ($useCache) {
                 Cache::put($cacheKey, $text, now()->addMinutes(30));
             }
 
@@ -218,7 +222,7 @@ Cover the most important concepts first.";
      * Help a CS student debug code with Socratic guidance.
      * Gives hints, not direct answers.
      */
-    public function debugCode(string $question, string $courseName, array $studentProfile): string
+    public function debugCode(string $question, string $courseName, array $studentProfile, array $history = []): string
     {
         $level = $this->adaptiveLevel($studentProfile['tms'] ?? 0.5);
 
@@ -233,40 +237,112 @@ RULES:
 5. If the student is very stuck (tms < 0.3), you may show a small corrected snippet
 6. Always end with an encouraging next step";
 
-        return $this->generate($question, $system, ['temperature' => 0.4, 'max_tokens' => 1024]);
+        return $this->generate($question, $system, ['temperature' => 0.4, 'max_tokens' => 1024, 'history' => $history]);
     }
 
     /**
      * Provide emotional support and concrete next-step guidance.
      */
-    public function motivateStudent(string $message, string $courseName, array $studentProfile): string
+    public function motivateStudent(string $message, string $courseName, array $studentProfile, array $history = []): string
     {
+        $enrolled  = ($studentProfile['enrolled'] ?? true) !== false;
         $riskLevel = $studentProfile['risk_level'] ?? 'unknown';
         $progress  = $studentProfile['progress'] ?? 'unknown';
 
+        // Only feed real progress/risk into the prompt when the student is
+        // actually enrolled — otherwise the AI would assert fabricated data.
+        $dataLine = $enrolled
+            ? "The student is studying {$courseName}. Their current progress: {$progress}. Risk level: {$riskLevel}."
+            : "You do NOT have any course progress or risk data for this student (they are not enrolled in a specific course here). Do NOT mention progress percentages or risk levels — encourage them generally and, if helpful, suggest exploring the Course Catalog.";
+
         $system = "You are a supportive, empathetic university tutor and mentor.
-The student is studying {$courseName}.
-Their current progress: {$progress}. Risk level: {$riskLevel}.
+{$dataLine}
 RULES:
 1. Acknowledge their feelings first (1-2 sentences)
 2. Normalize the struggle — university is hard for everyone
 3. Give ONE concrete, small action they can take RIGHT NOW
-4. Reference their actual progress if available — celebrate any wins
+4. Reference their actual progress ONLY if you were given real data above — never invent numbers
 5. Keep it warm but professional — you are a tutor, not a therapist
 6. Never exceed 150 words";
 
-        return $this->generate($message, $system, ['temperature' => 0.8, 'max_tokens' => 512]);
+        return $this->generate($message, $system, ['temperature' => 0.8, 'max_tokens' => 512, 'history' => $history]);
+    }
+
+    /**
+     * Human, reasoning narration for the "find resources" intent.
+     *
+     * Decides honestly what to say based on whether we actually have a subject and
+     * results. Never claims to have found resources that aren't there. Falls back
+     * to a deterministic, context-aware sentence if the model call fails.
+     *
+     * @param string|null $subject              Topic/course the student wants resources for, or null.
+     * @param string[]    $enrolledCourseNames  Names of the student's enrolled courses (may be empty).
+     * @param array       $foundResources       Resources we are about to show (may be empty).
+     */
+    public function resourceResponse(
+        ?string $subject,
+        array $enrolledCourseNames,
+        array $foundResources,
+        array $studentProfile
+    ): string {
+        $hasSubject   = filled($subject);
+        $hasResults   = count($foundResources) > 0;
+        $hasCourses   = count($enrolledCourseNames) > 0;
+        $courseList   = $hasCourses ? implode(', ', array_slice($enrolledCourseNames, 0, 6)) : '';
+        $videoTitles  = $hasResults
+            ? implode(' | ', array_map(fn ($r) => $r['title'] ?? '', array_slice($foundResources, 0, 5)))
+            : '';
+
+        $system = "You are a warm, thoughtful tutor at the University of Dodoma helping a student find learning resources.
+You reason briefly out loud like a real person and you are scrupulously honest.
+HARD RULES:
+1. NEVER claim to have found videos/resources unless results are explicitly provided to you.
+2. If there is NO subject and the student has NO enrolled courses: gently say you don't yet know what to look for, invite them to name a topic (give 1-2 concrete examples), and mention they can browse the Course Catalog to enrol. Do NOT invent topics for them.
+3. If there is NO subject but the student HAS enrolled courses: name those courses and ask which one (or which specific topic) they'd like resources for.
+4. If a subject AND results are provided: write a short, specific lead-in that names the subject and naturally introduces the videos below. Do not list the videos yourself.
+5. If a subject is given but NO results were found: say so honestly and suggest how to refine the topic.
+6. Conversational and human, 1-3 sentences, no bullet lists, no headings. Never exceed 70 words.";
+
+        $context = "STUDENT SITUATION:\n"
+            . '- Subject they want resources for: ' . ($hasSubject ? $subject : 'unknown / not specified') . "\n"
+            . '- Enrolled courses: ' . ($hasCourses ? $courseList : 'none — the student is not enrolled in any course') . "\n"
+            . '- Resources available to show: ' . ($hasResults ? $videoTitles : 'none') . "\n\n"
+            . 'Write your reply following the rules.';
+
+        try {
+            $text = $this->generate($context, $system, ['temperature' => 0.6, 'max_tokens' => 200]);
+            if (filled($text)) {
+                return trim($text);
+            }
+        } catch (\Throwable $e) {
+            // fall through to deterministic fallback
+        }
+
+        // Deterministic, context-aware fallback (model unavailable).
+        if ($hasSubject && $hasResults) {
+            return "Since you're looking into **{$subject}**, these should help — take a look:";
+        }
+        if ($hasSubject && !$hasResults) {
+            return "I couldn't find solid videos for **{$subject}** right now. Try naming the exact topic (e.g. a specific concept) and I'll look again.";
+        }
+        if ($hasCourses) {
+            return "Happy to find resources! Which of your courses should I focus on — {$courseList} — or is there a specific topic you have in mind?";
+        }
+        return "I'd love to find videos for you, but I don't yet know the topic — you're not enrolled in any course right now. Tell me what you'd like to learn (for example \"Python loops\" or \"photosynthesis\"), or browse the **Course Catalog** to enrol.";
     }
 
     /**
      * Socratic tutoring — explain a concept with adaptive depth.
      */
-    public function tutorExplain(string $question, string $courseName, string $intent, array $studentProfile): string
+    public function tutorExplain(string $question, string $courseName, string $intent, array $studentProfile, array $history = []): string
     {
         $level = $this->adaptiveLevel($studentProfile['tms'] ?? 0.5);
+        $enrolmentNote = ($studentProfile['enrolled'] ?? true) === false
+            ? "\n- The student is NOT enrolled in this course and you have NO progress/grade data for them — never state progress percentages or risk levels; speak in general terms."
+            : '';
 
         $system = "You are a Socratic tutor at the University of Dodoma teaching {$courseName}.
-Use {$level}.
+Use {$level}.{$enrolmentNote}
 IDENTITY & BOUNDARIES:
 - You are an AI tutor embedded in the university's Learning Management System (LMS).
 - You ONLY help with academic/learning questions related to the student's courses.
@@ -282,7 +358,7 @@ RULES:
 6. Never exceed 300 words
 7. For quiz-mode (restricted): only clarify terminology, never reveal answers";
 
-        return $this->generate($question, $system, ['cache' => true]);
+        return $this->generate($question, $system, ['cache' => true, 'history' => $history]);
     }
 
     /**
@@ -514,11 +590,23 @@ CRITICAL WRITING RULES — violating any of these will make the message useless:
      */
     private function buildPayload(string $message, string $system, array $options): array
     {
+        // Prepend prior conversation turns (multi-turn memory). Each entry is
+        // ['role' => 'user'|'model', 'content' => string]. Invalid/empty entries
+        // are skipped so a malformed history can never break the request.
+        $contents = [];
+        foreach ($options['history'] ?? [] as $turn) {
+            $role = ($turn['role'] ?? '') === 'model' ? 'model' : 'user';
+            $text = trim((string) ($turn['content'] ?? ''));
+            if ($text !== '') {
+                $contents[] = ['role' => $role, 'parts' => [['text' => $text]]];
+            }
+        }
+
+        // Current user message
+        $contents[] = ['role' => 'user', 'parts' => [['text' => $message]]];
+
         $payload = [
-            'contents' => [[
-                'role'  => 'user',
-                'parts' => [['text' => $message]],
-            ]],
+            'contents'         => $contents,
             'generationConfig' => [
                 'temperature'     => $options['temperature'] ?? 0.7,
                 'maxOutputTokens' => $options['max_tokens'] ?? 2048,

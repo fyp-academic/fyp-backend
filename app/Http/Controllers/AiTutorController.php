@@ -142,7 +142,7 @@ class AiTutorController extends Controller
 
     private function resolveCourseContext(?string $courseId, ?string $topicId): array
     {
-        $courseName = 'your course';
+        $courseName = 'your studies';
 
         if ($courseId) {
             $course = Course::find($courseId);
@@ -156,6 +156,68 @@ class AiTutorController extends Controller
         }
 
         return [$courseName, $courseId];
+    }
+
+    /**
+     * Names of the courses a student is enrolled in (for honest, grounded replies).
+     *
+     * @return string[]
+     */
+    private function enrolledCourseNames(string $studentId): array
+    {
+        return Enrollment::where('user_id', $studentId)
+            ->with('course:id,name')
+            ->get()
+            ->map(fn ($e) => $e->course?->name)
+            ->filter()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * True when the text is just a generic chip/action phrase with no real
+     * subject (e.g. "make flashcards", "quiz me", "find videos", "resources").
+     */
+    private function isGenericRequest(string $text): bool
+    {
+        $t = trim(preg_replace('/^[\p{So}\p{Cn}\s]+/u', '', $text)); // strip leading emoji
+        if ($t === '' || mb_strlen($t) < 3) {
+            return true;
+        }
+        return (bool) preg_match(
+            '/^(find|show|suggest|get|give|make|create|build|generate|some|a|me|my)?\s*'
+            . '(me|some)?\s*'
+            . '(related|learning|study|revision|practice|relevant)?\s*'
+            . '(videos?|resources?|materials?|links?|tutorials?|flash\s?cards?|cards?|questions?|quiz(zes)?|practice|notes?)\b'
+            . '[\s\W]*$/i',
+            $t
+        );
+    }
+
+    /**
+     * Normalize + cap conversation history for Gemini multi-turn memory.
+     * Maps the frontend's 'ai' role to Gemini's 'model', drops empties, and
+     * keeps only the most recent turns to bound token usage.
+     *
+     * @return array<int, array{role: string, content: string}>
+     */
+    private function normalizeHistory($history): array
+    {
+        if (!is_array($history)) {
+            return [];
+        }
+
+        $turns = [];
+        foreach ($history as $turn) {
+            $content = trim((string) ($turn['content'] ?? ''));
+            if ($content === '') {
+                continue;
+            }
+            $role = ($turn['role'] ?? 'user') === 'user' ? 'user' : 'model';
+            $turns[] = ['role' => $role, 'content' => mb_substr($content, 0, 2000)];
+        }
+
+        return array_slice($turns, -6);
     }
 
     // ═══════════════════════════════════════════════════════════════
@@ -242,12 +304,12 @@ class AiTutorController extends Controller
             if ($topicId) {
                 $activity = Activity::find($topicId);
                 if ($activity) {
-                    $greeting = "� {$activity->name} — let's master this!";
+                    $greeting = "📘 {$activity->name} — let's master this!";
                 }
             } elseif ($courseId) {
                 $course = Course::find($courseId);
                 if ($course) {
-                    $greeting = "� {$course->name} — let's dive in!";
+                    $greeting = "📚 {$course->name} — let's dive in!";
                 }
             } else {
                 $greeting = "📚 Study mode — I\'m ready to help you learn.";
@@ -263,7 +325,7 @@ class AiTutorController extends Controller
         }
         // 6. FORUM
         elseif (str_contains($pageLower, '/forum')) {
-            $greeting = '� Forum mode — I\'ll help you craft clear, compelling posts.';
+            $greeting = '💬 Forum mode — I\'ll help you craft clear, compelling posts.';
             $chips    = [
                 ['type' => 'tutor',     'label' => '✍️ Help me structure my post'],
                 ['type' => 'tutor',     'label' => '❓ Clarify my question first'],
@@ -272,7 +334,7 @@ class AiTutorController extends Controller
         }
         // 7. DASHBOARD
         elseif ($pageLower === '/' || str_contains($pageLower, '/dashboard')) {
-            $greeting = "� Welcome back, {$firstName}! Here's your learning pulse.";
+            $greeting = "👋 Welcome back, {$firstName}! Here's your learning pulse.";
             $chips    = [
                 ['type' => 'tutor',    'label' => '📊 How am I progressing?'],
                 ['type' => 'tutor',    'label' => '📅 Suggest a study plan'],
@@ -306,6 +368,9 @@ class AiTutorController extends Controller
             'quiz_attempt_id' => 'nullable|string',
             'mode'            => 'nullable|string|in:study,restricted,remediation,revision,reflection,general',
             'intent'          => 'nullable|string|in:tutor,summarize,resource,quiz,flashcard,debug,motivate,general',
+            'history'             => 'nullable|array',
+            'history.*.role'      => 'required_with:history|string|in:user,ai,model',
+            'history.*.content'   => 'required_with:history|string',
         ]);
 
         $student  = $request->user();
@@ -314,6 +379,7 @@ class AiTutorController extends Controller
         $intent   = $request->input('intent', 'general');
         $courseId  = $request->input('course_id');
         $topicId  = $request->input('topic_id');
+        $history  = $this->normalizeHistory($request->input('history', []));
 
         // Rate limiting
         if ($rateLimited = $this->checkRateLimit($student->id)) {
@@ -344,14 +410,14 @@ class AiTutorController extends Controller
 
                 // Intent-based routing
                 $intent === 'quiz'
-                    => $this->handleQuizIntent($question, $courseName, $topicId, $profile),
+                    => $this->handleQuizIntent($student->id, $question, $courseName, $courseId, $topicId, $profile),
 
                 $intent === 'summarize'
                     => $this->handleInlineSummarize($question, $courseName, $topicId, $profile),
 
-                // Default: Socratic tutoring
+                // Default: Socratic tutoring (carries conversation memory)
                 default
-                    => $this->gemini->tutorExplain($question, $courseName, $intent, $profile),
+                    => $this->gemini->tutorExplain($question, $courseName, $intent, $profile, $history),
             };
 
             $this->incrementUsage($student->id);
@@ -413,8 +479,8 @@ class AiTutorController extends Controller
             return "Here are the instructors for your enrolled courses:\n\n{$lines}";
         }
 
-        // ── "My grades" / "my score" / "how am I doing" ──
-        if (preg_match('/my grade|my score|my mark|my result|how am i doing|my progress|my gpa/i', $q)) {
+        // ── "My grades" / "my score" / "how am I doing / progressing" ──
+        if (preg_match('/my grade|my score|my mark|my result|how am i (doing|progressing|performing)|am i (progressing|on track)|my progress|progressing|my gpa/i', $q)) {
             $enrollments = Enrollment::where('user_id', $student->id)
                 ->with('course:id,name,short_name')
                 ->get();
@@ -585,13 +651,25 @@ class AiTutorController extends Controller
         return null;
     }
 
-    private function handleQuizIntent(string $question, string $courseName, ?string $topicId, array $profile): string
+    private function handleQuizIntent(string $studentId, string $question, string $courseName, ?string $courseId, ?string $topicId, array $profile): string
     {
         $content = $this->getTopicContent($topicId);
 
-        $prompt = $content
-            ? "Generate ONE practice question for a student in {$courseName}.\n\nTopic content:\n{$content}\n\nStudent request: {$question}"
-            : "Generate ONE practice question about {$courseName}.\n\nStudent request: {$question}";
+        // No material and only a generic "quiz me" with no course → ask what to
+        // quiz on instead of inventing an ungrounded question.
+        if (empty($content) && !$courseId && $this->isGenericRequest($question)) {
+            $enrolled = $this->enrolledCourseNames($studentId);
+            return $enrolled
+                ? "Happy to quiz you! Which topic should I use — open a lesson, or pick from your courses (" . implode(', ', array_slice($enrolled, 0, 4)) . ")."
+                : "Happy to quiz you! Tell me the topic you'd like practice questions on (e.g. \"binary search\" or \"photosynthesis\"), or enrol in a course to get questions from its materials.";
+        }
+
+        if ($content) {
+            $prompt = "Generate ONE practice question for a student studying {$courseName}.\n\nTopic content:\n{$content}\n\nStudent request: {$question}";
+        } else {
+            $subjectNote = $courseName !== 'your studies' ? " (course: {$courseName})" : '';
+            $prompt = "Generate ONE practice question about the topic the student asked about: \"{$question}\"{$subjectNote}.";
+        }
 
         return $this->gemini->tutorExplain($prompt, $courseName, 'quiz', $profile);
     }
@@ -777,8 +855,7 @@ class AiTutorController extends Controller
             $cleanQuery = '';
         }
 
-        // Build search term from topic + course context (not raw chip text)
-        $searchTerm = $cleanQuery ?: $rawQuery;
+        // Resolve real subject from topic / course context.
         $topicName  = null;
         $courseName = null;
 
@@ -794,22 +871,68 @@ class AiTutorController extends Controller
             $courseName = Course::find($courseId)?->name;
         }
 
-        // Prioritize: topic name + course name → much better YouTube results
+        $hasContext = (bool) ($topicName || $courseName);
+
+        // Is the cleaned query an actual topic, or just a generic chip phrase
+        // like "find video resources" / "learning materials"?
+        $isGenericPhrase = !$cleanQuery || (bool) preg_match(
+            '/^(find|show|suggest|get|some|a)?\s*(me)?\s*(related|learning|study|relevant)?\s*(videos?|resources?|materials?|links?|tutorials?)\b.*$/i',
+            $cleanQuery
+        );
+        $hasMeaningfulQuery = $cleanQuery && !$isGenericPhrase && mb_strlen($cleanQuery) >= 3;
+
+        // The student's enrolled courses — used for honest, human reasoning.
+        $enrolledCourseNames = Enrollment::where('user_id', $student->id)
+            ->with('course')
+            ->get()
+            ->map(fn ($e) => $e->course?->name)
+            ->filter()
+            ->values()
+            ->all();
+
+        // ── No real subject → reason like a human; never dump random videos ──
+        if (!$hasContext && !$hasMeaningfulQuery) {
+            if ($extLimited = $this->checkExternalRateLimit()) {
+                return $extLimited;
+            }
+            $profile  = $this->buildStudentProfile($student->id, $courseId);
+            $response = $this->gemini->resourceResponse(null, $enrolledCourseNames, [], $profile);
+            $this->incrementUsage($student->id);
+
+            return response()->json([
+                'response'  => $response,
+                'resources' => [],
+                'meta'      => ['status' => 'ok', 'search_term' => null, 'results_count' => 0],
+            ]);
+        }
+
+        // ── Real subject → build a focused search term and fetch resources ──
         if ($topicName && $courseName) {
             $searchTerm = "{$topicName} {$courseName} tutorial";
         } elseif ($topicName) {
             $searchTerm = "{$topicName} tutorial";
-        } elseif ($courseName && $cleanQuery) {
+        } elseif ($courseName && $hasMeaningfulQuery) {
             $searchTerm = "{$courseName} {$cleanQuery}";
         } elseif ($courseName) {
             $searchTerm = "{$courseName} lecture tutorial";
+        } else {
+            $searchTerm = $cleanQuery;
         }
 
         $resources = $this->getRelatedResources($courseId, $topicId, $searchTerm);
+        $subject   = $topicName ?: ($courseName ?: $cleanQuery);
 
-        $responseText = count($resources) > 0
-            ? "Here are some resources I found to help you:"
-            : "I couldn't find specific resources right now. Try searching YouTube for: \"{$searchTerm}\"";
+        // Human, reasoning lead-in (honest about whether results exist). Don't fail
+        // the whole fetch if the AI is rate-limited — degrade to a simple line.
+        if ($this->checkExternalRateLimit()) {
+            $responseText = count($resources) > 0
+                ? "Here's what I found on **{$subject}**:"
+                : "I couldn't find solid videos for **{$subject}** right now — try a more specific topic.";
+        } else {
+            $profile      = $this->buildStudentProfile($student->id, $courseId);
+            $responseText = $this->gemini->resourceResponse($subject, $enrolledCourseNames, $resources, $profile);
+            $this->incrementUsage($student->id);
+        }
 
         return response()->json([
             'response'  => $responseText,
@@ -846,13 +969,26 @@ class AiTutorController extends Controller
             return $extLimited;
         }
 
-        // Gather content — prefer topic content, fall back to student message
-        $content = $this->getTopicContent($topicId);
-        if (empty($content)) {
-            $content = $request->input('question');
+        // Gather content — prefer real topic material.
+        $content  = $this->getTopicContent($topicId);
+        $question = $request->input('question');
+        [$courseName, $courseId] = $this->resolveCourseContext($courseId, $topicId);
+
+        // No material AND only a generic chip request with no course → ask for a
+        // subject instead of generating nonsense cards from the button label.
+        if (empty($content) && !$courseId && $this->isGenericRequest($question)) {
+            $enrolled = $this->enrolledCourseNames($student->id);
+            $msg = $enrolled
+                ? "Sure — which topic should I turn into flashcards? Open a lesson, or name a subject from your courses (" . implode(', ', array_slice($enrolled, 0, 4)) . ")."
+                : "I'd love to make flashcards for you! Open a lesson first, or tell me the topic you want to revise (e.g. \"Newton's laws\" or \"SQL joins\") and I'll build a set.";
+            return $this->successResponse($msg, 'study', 'flashcard', $this->buildStudentProfile($student->id, $courseId));
         }
 
-        [$courseName, $courseId] = $this->resolveCourseContext($courseId, $topicId);
+        // No material but the student named a real subject → use their words.
+        if (empty($content)) {
+            $content = $question;
+        }
+
         $profile = $this->buildStudentProfile($student->id, $courseId);
 
         try {
@@ -876,11 +1012,15 @@ class AiTutorController extends Controller
             'question'  => 'required|string|max:4000',
             'topic_id'  => 'nullable|string',
             'course_id' => 'nullable|string',
+            'history'           => 'nullable|array',
+            'history.*.role'    => 'required_with:history|string|in:user,ai,model',
+            'history.*.content' => 'required_with:history|string',
         ]);
 
         $student = $request->user();
         $courseId = $request->input('course_id');
         $topicId = $request->input('topic_id');
+        $history = $this->normalizeHistory($request->input('history', []));
 
         if ($rateLimited = $this->checkRateLimit($student->id)) {
             return $rateLimited;
@@ -896,7 +1036,8 @@ class AiTutorController extends Controller
             $response = $this->gemini->debugCode(
                 $request->input('question'),
                 $courseName,
-                $profile
+                $profile,
+                $history
             );
             $this->incrementUsage($student->id);
 
@@ -917,10 +1058,14 @@ class AiTutorController extends Controller
             'question'  => 'required|string|max:2000',
             'course_id' => 'nullable|string',
             'topic_id'  => 'nullable|string',
+            'history'           => 'nullable|array',
+            'history.*.role'    => 'required_with:history|string|in:user,ai,model',
+            'history.*.content' => 'required_with:history|string',
         ]);
 
         $student = $request->user();
         $courseId = $request->input('course_id');
+        $history = $this->normalizeHistory($request->input('history', []));
 
         if ($rateLimited = $this->checkRateLimit($student->id)) {
             return $rateLimited;
@@ -940,7 +1085,8 @@ class AiTutorController extends Controller
             $response = $this->gemini->motivateStudent(
                 $request->input('question'),
                 $courseName,
-                $profile
+                $profile,
+                $history
             );
             $this->incrementUsage($student->id);
 
@@ -961,11 +1107,12 @@ class AiTutorController extends Controller
     private function buildStudentProfile(string $studentId, ?string $courseId): array
     {
         $profile = [
-            'tms'            => 0.5,   // Topic Mastery Score (0–1)
-            'risk_level'     => 'none',
-            'progress'       => '0%',
-            'learning_style' => null,   // H | A | T | C
+            'tms'            => 0.5,        // Topic Mastery Score (0–1)
+            'risk_level'     => 'unknown',  // unknown until we have a real record
+            'progress'       => 'unknown',  // never claim 0% for a non-enrolled student
+            'learning_style' => null,       // H | A | T | C
             'weeks_active'   => 0,
+            'enrolled'       => false,      // true only when an enrollment row exists
         ];
 
         if (!$courseId) {
@@ -978,6 +1125,7 @@ class AiTutorController extends Controller
             ->first();
 
         if ($enrollment) {
+            $profile['enrolled'] = true;
             $progress = $enrollment->progress ?? 0;
             $profile['progress'] = round($progress, 1) . '%';
             $profile['tms']      = min(1.0, $progress / 100);
