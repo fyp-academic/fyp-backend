@@ -275,16 +275,10 @@ class AuthController extends Controller
             }
         }
 
-        // Check if admin is creating user with auto-verify flag
-        $autoVerify = $request->boolean('auto_verify');
-        $requestingUser = $request->user();
-
-        // If no user from middleware, try to manually verify token for admin auto-verify
-        if (!$requestingUser && $autoVerify) {
-            $requestingUser = $this->getUserFromToken($request);
-        }
-
-        $isAdminCreating = $requestingUser && RolePolicy::isAdmin($requestingUser) && $autoVerify;
+        // Any account created by an authenticated admin is auto-verified so the
+        // new user can log in immediately — regardless of the auto_verify flag.
+        $requestingUser = $request->user() ?: $this->getUserFromToken($request);
+        $isAdminCreating = $requestingUser && RolePolicy::isAdmin($requestingUser);
 
         if ($isAdminCreating) {
             // Auto-verify: set email_verified_at and skip OTP
@@ -389,7 +383,8 @@ class AuthController extends Controller
             $loginSession = $this->engagement->openLoginSession(
                 $user->id,
                 $request->input('device_type', 'desktop'),
-                $request->ip()
+                $request->ip(),
+                $request->userAgent()
             );
             $loginSessionId = $loginSession->id;
         } catch (\Throwable $e) {

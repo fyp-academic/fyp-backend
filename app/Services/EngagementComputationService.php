@@ -555,16 +555,66 @@ class EngagementComputationService
     public function openLoginSession(
         string $userId,
         string $deviceType = 'desktop',
-        ?string $ipAddress = null
+        ?string $ipAddress = null,
+        ?string $userAgent = null
     ): LearnerLoginSession {
+        $parsed = $this->parseUserAgent($userAgent);
+
         return LearnerLoginSession::create([
             'id'          => Str::uuid()->toString(),
             'user_id'     => $userId,
             'started_at'  => now(),
-            'device_type' => $deviceType,
+            // Prefer a parsed device type from the User-Agent; fall back to the
+            // caller-supplied value (defaults to 'desktop').
+            'device_type' => $parsed['device_type'] ?? $deviceType,
             'ip_address'  => $ipAddress,
+            'user_agent'  => $userAgent,
+            'browser'     => $parsed['browser'],
+            'os'          => $parsed['os'],
             'hour_of_day' => (int) now()->format('G'),
         ]);
+    }
+
+    /**
+     * Best-effort parse of a User-Agent string into device type, browser and OS.
+     * Returns nulls when the agent is empty/unrecognized.
+     *
+     * @return array{device_type: ?string, browser: ?string, os: ?string}
+     */
+    private function parseUserAgent(?string $ua): array
+    {
+        if (!$ua) {
+            return ['device_type' => null, 'browser' => null, 'os' => null];
+        }
+
+        // OS detection
+        $os = match (true) {
+            (bool) preg_match('/Windows/i', $ua)                 => 'Windows',
+            (bool) preg_match('/iPhone|iPad|iPod/i', $ua)        => 'iOS',
+            (bool) preg_match('/Mac OS X|Macintosh/i', $ua)      => 'macOS',
+            (bool) preg_match('/Android/i', $ua)                 => 'Android',
+            (bool) preg_match('/Linux/i', $ua)                   => 'Linux',
+            default                                              => 'Other',
+        };
+
+        // Browser detection (order matters: Edge/Opera before Chrome, Chrome before Safari)
+        $browser = match (true) {
+            (bool) preg_match('/Edg|Edge/i', $ua)                => 'Edge',
+            (bool) preg_match('/OPR|Opera/i', $ua)               => 'Opera',
+            (bool) preg_match('/Chrome|CriOS/i', $ua)            => 'Chrome',
+            (bool) preg_match('/Firefox|FxiOS/i', $ua)           => 'Firefox',
+            (bool) preg_match('/Safari/i', $ua)                  => 'Safari',
+            default                                              => 'Other',
+        };
+
+        // Device type
+        $deviceType = match (true) {
+            (bool) preg_match('/iPad|Tablet/i', $ua)                      => 'tablet',
+            (bool) preg_match('/Mobi|Android|iPhone|iPod|Windows Phone/i', $ua) => 'mobile',
+            default                                                       => 'desktop',
+        };
+
+        return ['device_type' => $deviceType, 'browser' => $browser, 'os' => $os];
     }
 
     /**

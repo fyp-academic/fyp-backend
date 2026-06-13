@@ -121,6 +121,11 @@ Route::prefix('v1')->group(function () {
         });
 
         // ─────────────────────────────────────────────────────────────────────
+        // ACTIVITY LOGS (Admin only) — user sign-in audit (who, device, when, where)
+        // ─────────────────────────────────────────────────────────────────────
+        Route::middleware('strict.admin')->get('admin/activity-logs', [UserController::class, 'activityLogs']);
+
+        // ─────────────────────────────────────────────────────────────────────
         // PUBLIC COURSE CATALOG (for students to browse and self-enroll)
         // ─────────────────────────────────────────────────────────────────────
         Route::get('/courses/catalog', [CourseController::class, 'catalog']);

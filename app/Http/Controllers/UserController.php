@@ -6,8 +6,11 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use App\Models\User;
 use App\Models\Instructor;
+use App\Models\LearnerLoginSession;
 use App\Policies\RolePolicy;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Cache;
 
 class UserController extends Controller
 {
@@ -381,5 +384,116 @@ class UserController extends Controller
         });
 
         return response()->json(['message' => 'Instructor deleted successfully.']);
+    }
+
+    /**
+     * GET /api/v1/admin/activity-logs
+     * Admin-only audit of user sign-in sessions: who, device, when, from where.
+     */
+    public function activityLogs(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        if (!RolePolicy::isAdmin($user)) {
+            return response()->json(['message' => 'Forbidden. Only admins can view activity logs.'], 403);
+        }
+
+        $query = LearnerLoginSession::query()
+            ->join('users', 'users.id', '=', 'learner_login_sessions.user_id')
+            ->select(
+                'learner_login_sessions.id',
+                'learner_login_sessions.started_at',
+                'learner_login_sessions.duration_seconds',
+                'learner_login_sessions.device_type',
+                'learner_login_sessions.browser',
+                'learner_login_sessions.os',
+                'learner_login_sessions.ip_address',
+                'users.name as user_name',
+                'users.email as user_email',
+                'users.role as role'
+            );
+
+        if ($request->filled('role')) {
+            $query->where('users.role', $request->role);
+        }
+
+        if ($request->filled('search')) {
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('users.name', 'ilike', "%{$search}%")
+                  ->orWhere('users.email', 'ilike', "%{$search}%");
+            });
+        }
+
+        $sessions = $query->orderBy('learner_login_sessions.started_at', 'desc')
+            ->paginate((int) $request->input('per_page', 25));
+
+        // Resolve gelocation for the unique IPs on this page (cached, best-effort).
+        $geoCache = [];
+        $rows = collect($sessions->items())->map(function ($s) use (&$geoCache) {
+            $ip = $s->ip_address;
+            if ($ip && !array_key_exists($ip, $geoCache)) {
+                $geoCache[$ip] = $this->geoFromIp($ip);
+            }
+            $geo = $ip ? $geoCache[$ip] : ['city' => null, 'country' => null];
+
+            return [
+                'id'               => $s->id,
+                'user_name'        => $s->user_name,
+                'user_email'       => $s->user_email,
+                'role'             => $s->role,
+                'action'           => 'Signed in',
+                'device_type'      => $s->device_type,
+                'browser'          => $s->browser,
+                'os'               => $s->os,
+                'ip_address'       => $ip,
+                'city'             => $geo['city'],
+                'country'          => $geo['country'],
+                'started_at'       => $s->started_at,
+                'duration_seconds' => $s->duration_seconds,
+            ];
+        });
+
+        return response()->json([
+            'data' => $rows,
+            'meta' => [
+                'current_page' => $sessions->currentPage(),
+                'last_page'    => $sessions->lastPage(),
+                'per_page'     => $sessions->perPage(),
+                'total'        => $sessions->total(),
+            ],
+        ]);
+    }
+
+    /**
+     * Best-effort IP geolocation (city/country). Cached for a day; private/invalid
+     * IPs and lookup failures degrade to null — never blocks the response.
+     *
+     * @return array{city: ?string, country: ?string}
+     */
+    private function geoFromIp(?string $ip): array
+    {
+        $empty = ['city' => null, 'country' => null];
+
+        if (!$ip || !filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
+            return $empty;
+        }
+
+        return Cache::remember("geoip:{$ip}", now()->addDay(), function () use ($ip, $empty) {
+            try {
+                $res = Http::timeout(2)->get("http://ip-api.com/json/{$ip}", [
+                    'fields' => 'status,country,city',
+                ]);
+                if ($res->ok() && $res->json('status') === 'success') {
+                    return [
+                        'city'    => $res->json('city') ?: null,
+                        'country' => $res->json('country') ?: null,
+                    ];
+                }
+            } catch (\Throwable $e) {
+                // ignore — best effort
+            }
+            return $empty;
+        });
     }
 }

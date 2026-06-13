@@ -13,7 +13,8 @@ class LearnerLoginSession extends Model
 
     protected $fillable = [
         'id', 'user_id', 'started_at', 'ended_at', 'duration_seconds',
-        'device_type', 'ip_address', 'hour_of_day', 'is_bounce', 'pages_visited',
+        'device_type', 'ip_address', 'user_agent', 'browser', 'os',
+        'hour_of_day', 'is_bounce', 'pages_visited',
     ];
 
     protected function casts(): array
