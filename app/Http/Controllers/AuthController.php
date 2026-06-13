@@ -384,7 +384,7 @@ class AuthController extends Controller
                 $user->id,
                 $request->input('device_type', 'desktop'),
                 $request->ip(),
-                $request->userAgent()
+                $request->input('user_agent') ?: $request->userAgent()
             );
             $loginSessionId = $loginSession->id;
         } catch (\Throwable $e) {
