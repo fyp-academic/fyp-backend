@@ -24,6 +24,7 @@ return Application::configure(basePath: dirname(__DIR__))
             'admin.or.instructor' => \App\Http\Middleware\AdminOrInstructor::class,
             'strict.admin'        => \App\Http\Middleware\StrictAdmin::class,
             'instructor.access'   => \App\Http\Middleware\InstructorAccess::class,
+            'frameable'           => \App\Http\Middleware\FrameableContent::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

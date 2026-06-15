@@ -811,12 +811,17 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
 
     // Token-authenticated player wrappers, result sinks + editor (no session/bearer,
     // because these load inside cross-origin iframes that cannot forward headers).
-    Route::get('scorm/play/{token}',   [ScormPackageController::class, 'play']);
     Route::post('scorm/track/{token}', [ScormPackageController::class, 'track']);
-    Route::get('h5p/play/{token}',     [H5PController::class, 'play']);
     Route::post('h5p/results/{token}', [H5PController::class, 'results']);
-    Route::get('h5p/editor/{token}',   [H5PController::class, 'editor']);
     Route::match(['get', 'post'], 'h5p/ajax', [H5PController::class, 'ajax']);
+
+    // Iframe wrapper pages — embedded cross-subdomain by the SPAs, so they must
+    // allow framing (CSP frame-ancestors instead of X-Frame-Options).
+    Route::middleware('frameable')->group(function () {
+        Route::get('scorm/play/{token}', [ScormPackageController::class, 'play']);
+        Route::get('h5p/play/{token}',   [H5PController::class, 'play']);
+        Route::get('h5p/editor/{token}', [H5PController::class, 'editor']);
+    });
 
 }); // Close Route::prefix('v1')
 
