@@ -57,16 +57,22 @@
             window.addEventListener('message', function (e) {
                 if (! e.data || e.data.type !== 'h5p-get-content') { return; }
                 try {
-                    editor.getContent(function (content) {
-                        parent.postMessage({
-                            type:    'h5p-content',
-                            library: content.library,
-                            params:  content.params,
-                            title:   content.title
-                        }, '*');
-                    });
+                    editor.getContent(
+                        function (content) {
+                            parent.postMessage({
+                                type:    'h5p-content',
+                                library: content.library,
+                                params:  content.params,
+                                title:   content.title
+                            }, '*');
+                        },
+                        function (reason) {
+                            // Invalid content (missing title/library/params, validation, etc.)
+                            parent.postMessage({ type: 'h5p-content-error', reason: String(reason) }, '*');
+                        }
+                    );
                 } catch (err) {
-                    parent.postMessage({ type: 'h5p-content-error', message: String(err) }, '*');
+                    parent.postMessage({ type: 'h5p-content-error', reason: String(err) }, '*');
                 }
             });
 

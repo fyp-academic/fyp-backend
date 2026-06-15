@@ -62,8 +62,14 @@ class H5PController extends Controller
         // Keep the original archive for AI text extraction + re-download.
         $packagePath = $file->store("h5p/{$activity->course_id}", 'public');
 
+        // The H5P validator requires the file path to literally end in ".h5p",
+        // but store() saves it as a random *.zip — so install from a .h5p temp copy.
+        $h5pTmp = storage_path('app/h5p-upload-' . Str::random(10) . '.h5p');
+        copy(storage_path('app/public/' . $packagePath), $h5pTmp);
+
         $h5p       = new H5PService();
-        $contentId = $h5p->installPackage(storage_path('app/public/' . $packagePath));
+        $contentId = $h5p->installPackage($h5pTmp);
+        @unlink($h5pTmp);
 
         if (! $contentId) {
             Storage::disk('public')->delete($packagePath);
