@@ -278,7 +278,8 @@ class MaterialExtractorService
             return storage_path('app/'.$path);
         }
 
-        if (str_starts_with($path, 'files/') || str_starts_with($path, 'videos/')) {
+        if (str_starts_with($path, 'files/') || str_starts_with($path, 'videos/')
+            || str_starts_with($path, 'scorm/') || str_starts_with($path, 'h5p/')) {
             return storage_path('app/public/'.$path);
         }
 

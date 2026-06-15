@@ -27,6 +27,8 @@ use App\Http\Controllers\ForumController;
 use App\Http\Controllers\GlossaryController;
 use App\Http\Controllers\LessonController;
 use App\Http\Controllers\ScormController;
+use App\Http\Controllers\ScormPackageController;
+use App\Http\Controllers\H5PController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\CollegeController;
 use App\Http\Controllers\DegreeProgrammeController;
@@ -310,6 +312,15 @@ Route::prefix('v1')->group(function () {
             Route::get('/{id}/scorm-tracks',          [ScormController::class, 'index']);
             Route::post('/{id}/scorm-tracks',         [ScormController::class, 'store']);
             Route::get('/{id}/scorm-tracks/summary',  [ScormController::class, 'summary']);
+
+            // SCORM package upload (instructor)
+            Route::post('/{id}/scorm-upload', [ScormPackageController::class, 'upload']);
+            Route::delete('/{id}/scorm',      [ScormPackageController::class, 'destroy']);
+
+            // H5P content (instructor): upload pre-built .h5p or save authored content
+            Route::post('/{id}/h5p-upload',  [H5PController::class, 'upload']);
+            Route::post('/{id}/h5p/content', [H5PController::class, 'saveContent']);
+            Route::delete('/{id}/h5p',       [H5PController::class, 'destroy']);
         });
 
         // ─────────────────────────────────────────────────────────────────────
@@ -786,6 +797,26 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
         Route::post('adaptations/{adaptationId}/unflag', [InstructorAdaptationController::class, 'unflag']);
         Route::get('students/{studentId}/profile', [InstructorAdaptationController::class, 'studentProfile']);
     });
+
+    // ─────────────────────────────────────────────────────────────────────
+    // SCORM & H5P — student launch (authenticated) + token-authed runtime
+    // ─────────────────────────────────────────────────────────────────────
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('student/activities/{id}/scorm/launch', [ScormPackageController::class, 'launch']);
+        Route::post('student/activities/{id}/h5p/launch',   [H5PController::class, 'launch']);
+    });
+
+    // Instructor: open an H5P authoring session (returns a token URL).
+    Route::middleware('auth:sanctum')->post('h5p/editor-session/{activityId?}', [H5PController::class, 'editorSession']);
+
+    // Token-authenticated player wrappers, result sinks + editor (no session/bearer,
+    // because these load inside cross-origin iframes that cannot forward headers).
+    Route::get('scorm/play/{token}',   [ScormPackageController::class, 'play']);
+    Route::post('scorm/track/{token}', [ScormPackageController::class, 'track']);
+    Route::get('h5p/play/{token}',     [H5PController::class, 'play']);
+    Route::post('h5p/results/{token}', [H5PController::class, 'results']);
+    Route::get('h5p/editor/{token}',   [H5PController::class, 'editor']);
+    Route::match(['get', 'post'], 'h5p/ajax', [H5PController::class, 'ajax']);
 
 }); // Close Route::prefix('v1')
 

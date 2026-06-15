@@ -9,6 +9,8 @@
         "php": "^8.2",
         "bigbluebutton/bigbluebutton-api-php": "^2.3",
         "firebase/php-jwt": "^7.0",
+        "h5p/h5p-core": "^1.28",
+        "h5p/h5p-editor": "^1.25",
         "laravel/framework": "^12.0",
         "laravel/reverb": "^1.10",
         "laravel/sanctum": "^4.0",
