@@ -205,25 +205,16 @@ class ActivityMaterialService
         ];
     }
 
-    /** @return array<string, mixed>|null */
+    /**
+     * H5P/SCORM are self-contained interactive packages — their archive contents
+     * are structural JSON/HTML, not meaningful prose — so they are deliberately
+     * excluded from text extraction / adaptive chunking.
+     *
+     * @return array<string, mixed>|null
+     */
     private function payloadFromPackageSettings(Activity $activity, array $settings, ?string $uploadedBy): ?array
     {
-        $path = $settings['packagePath'] ?? $settings['filePath'] ?? $settings['file_path'] ?? null;
-        if (! $path) {
-            return null;
-        }
-
-        return [
-            'course_id' => $activity->course_id,
-            'uploaded_by' => $uploadedBy,
-            'title' => $settings['fileName'] ?? $activity->name,
-            'type' => $activity->type === 'h5p' ? 'h5p' : 'scorm',
-            'file_path' => $path,
-            'url' => null,
-            'mime_type' => $settings['mimeType'] ?? 'application/zip',
-            'file_size' => (int) ($settings['fileSize'] ?? 0),
-            'processing_status' => 'pending',
-        ];
+        return null;
     }
 
     private function isYoutubeUrl(string $url): bool

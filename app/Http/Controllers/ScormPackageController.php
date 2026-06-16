@@ -11,7 +11,6 @@ use App\Services\ActivityResultService;
 use Illuminate\Contracts\View\View;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\File;
 use Illuminate\Support\Facades\Storage;
@@ -116,16 +115,8 @@ class ScormPackageController extends Controller
         $activity->settings       = $settings;
         $activity->save();
 
-        // Feed the AI personalization pipeline (extracts text from the archive).
-        $this->materialService->syncFromUpload(
-            $activity,
-            $packagePath,
-            $fileName,
-            'application/zip',
-            (int) $file->getSize(),
-            'scorm',
-            Auth::id(),
-        );
+        // SCORM packages are self-contained interactive content — intentionally NOT
+        // run through the course-material text-extraction/adaptive pipeline.
 
         return response()->json([
             'message' => 'SCORM package uploaded successfully.',

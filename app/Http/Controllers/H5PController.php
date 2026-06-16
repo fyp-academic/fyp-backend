@@ -87,15 +87,9 @@ class H5PController extends Controller
         $activity->settings       = $settings;
         $activity->save();
 
-        $this->materialService->syncFromUpload(
-            $activity,
-            $packagePath,
-            $file->getClientOriginalName(),
-            'application/zip',
-            (int) $file->getSize(),
-            'h5p',
-            Auth::id(),
-        );
+        // Interactive H5P packages are self-contained — they are intentionally NOT
+        // run through the course-material text-extraction/adaptive pipeline (its
+        // content.json is structural JSON, not meaningful prose for personalization).
 
         return response()->json([
             'message' => 'H5P package uploaded successfully.',
