@@ -230,39 +230,16 @@ class QuizController extends Controller
                 ->where('type', 'quiz')
                 ->firstOrFail();
 
-            // Check time restrictions on the quiz. resolveQuizWindow reads the
-            // openDate/closeDate/timeLimit the instructor actually configured.
-            $window = $this->resolveQuizWindow($activity);
-            $timeStatus = $this->getActivityTimeStatus($window['open'], $window['close']);
-            
-            if (!$timeStatus['can_attempt']) {
-                $reason = $timeStatus['reason'] ?? 'unknown';
-                $message = $reason === 'not_started' 
-                    ? 'Quiz has not started yet. Please try again after the start time.'
-                    : 'Quiz submission window has closed. No further attempts allowed.';
-                
-                Log::warning('Quiz attempt blocked due to time restriction', [
-                    'activity_id' => $id,
-                    'student_id' => $user->id,
-                    'reason' => $reason,
-                    'time_status' => $timeStatus,
-                ]);
-                
-                return response()->json([
-                    'message' => $message,
-                    'error' => 'time_restriction',
-                    'reason' => $reason,
-                    'time_status' => $timeStatus,
-                ], 403);
-            }
-
-            // Get or create the next attempt number
+            // Get the most recent attempt up front. The already-submitted check
+            // must run BEFORE the time-window check so that a completed quiz whose
+            // close date has passed still returns its attempt for review (with
+            // attempt_id) instead of a dead-end "window closed" error.
             $lastAttempt = QuizAttempt::where('activity_id', $id)
                 ->where('student_id', $user->id)
                 ->orderByDesc('attempt_number')
                 ->first();
 
-            // Check if quiz has been submitted - if so, only allow review
+            // Already submitted? Only allow review — regardless of the time window.
             if ($lastAttempt && in_array($lastAttempt->status, ['submitted', 'graded', 'pending_review'])) {
                 Log::info('Student attempting to retake submitted quiz', [
                     'activity_id' => $id,
@@ -270,12 +247,39 @@ class QuizController extends Controller
                     'last_attempt_id' => $lastAttempt->id,
                     'last_attempt_status' => $lastAttempt->status,
                 ]);
-                
+
                 return response()->json([
                     'message' => 'This quiz has already been submitted. You can only review your previous attempt.',
                     'error' => 'quiz_already_submitted',
                     'attempt_id' => $lastAttempt->id,
                 ], 422);
+            }
+
+            // Check time restrictions on the quiz (only for quizzes with no
+            // completed attempt). resolveQuizWindow reads the
+            // openDate/closeDate/timeLimit the instructor actually configured.
+            $window = $this->resolveQuizWindow($activity);
+            $timeStatus = $this->getActivityTimeStatus($window['open'], $window['close']);
+
+            if (!$timeStatus['can_attempt']) {
+                $reason = $timeStatus['reason'] ?? 'unknown';
+                $message = $reason === 'not_started'
+                    ? 'Quiz has not started yet. Please try again after the start time.'
+                    : 'Quiz submission window has closed. No further attempts allowed.';
+
+                Log::warning('Quiz attempt blocked due to time restriction', [
+                    'activity_id' => $id,
+                    'student_id' => $user->id,
+                    'reason' => $reason,
+                    'time_status' => $timeStatus,
+                ]);
+
+                return response()->json([
+                    'message' => $message,
+                    'error' => 'time_restriction',
+                    'reason' => $reason,
+                    'time_status' => $timeStatus,
+                ], 403);
             }
 
             $attemptNumber = ($lastAttempt ? $lastAttempt->attempt_number : 0) + 1;
