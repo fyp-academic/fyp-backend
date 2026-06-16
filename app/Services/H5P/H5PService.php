@@ -287,7 +287,15 @@ class H5PService
             'integration'   => $integration,
             'coreScripts'   => $this->coreScriptUrls(),
             'coreStyles'    => $this->coreStyleUrls(),
-            'editorScripts' => array_merge($this->editorScriptUrls(), [$this->editorUrl . '/language/en.js']),
+            // Outer page only needs ns.Editor (which also defines ns.t/ns.wrap).
+            // The full editor script list — including h5peditor.js, whose
+            // top-level window.parent.H5PEditor grab throws cross-origin in this
+            // SPA-embedded page — is loaded by ns.Editor into its own same-origin
+            // inner iframe via integration.editor.assets.js (still the full list).
+            'editorScripts' => [
+                $this->editorUrl . '/scripts/h5peditor-editor.js',
+                $this->editorUrl . '/language/en.js',
+            ],
             'editorStyles'  => $this->editorStyleUrls(),
             'library'       => $library,
             'params'        => $params,
