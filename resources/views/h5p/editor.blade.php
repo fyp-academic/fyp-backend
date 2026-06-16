@@ -71,6 +71,24 @@
             var element = document.getElementById('h5p-editor');
             var editor  = new ns.Editor(LIBRARY, PARAMS, element);
 
+            // Relabel the content-type selector's default "-" option with a
+            // friendly placeholder. The selector lives in the same-origin
+            // editor-form iframe that ns.Editor builds; poll until it renders,
+            // then rewrite the option text (keep value="-" — the editor uses it
+            // as the "nothing selected" sentinel).
+            (function () {
+                var PLACEHOLDER = 'Select a content type…';
+                var n = 0;
+                var iv = setInterval(function () {
+                    var fr  = document.querySelector('.h5p-editor-iframe');
+                    var doc = fr && fr.contentDocument;
+                    var opt = doc && doc.querySelector('select[name="h5peditor-library"] option[value="-"]');
+                    var hit = false;
+                    if (opt) { opt.textContent = PLACEHOLDER; hit = true; }
+                    if (hit || ++n > 100) { clearInterval(iv); }
+                }, 150);
+            })();
+
             // Respond to the parent SPA's request for the authored content.
             window.addEventListener('message', function (e) {
                 if (! e.data || e.data.type !== 'h5p-get-content') { return; }
