@@ -221,9 +221,15 @@ class H5PService
         ];
 
         return [
-            'integration' => $integration,
-            'coreScripts' => $this->coreScriptUrls(),
-            'coreStyles'  => $this->coreStyleUrls(),
+            'integration'    => $integration,
+            'coreScripts'    => $this->coreScriptUrls(),
+            'coreStyles'     => $this->coreStyleUrls(),
+            // Per-content library assets. This is a "div" embed, so H5P.init
+            // instantiates the content directly on the page (H5P.newRunnable)
+            // and the library constructors must already be loaded — the player
+            // view must emit these as real <script>/<link> tags.
+            'contentScripts' => $contentScripts,
+            'contentStyles'  => $contentStyles,
         ];
     }
 

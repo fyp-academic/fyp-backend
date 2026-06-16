@@ -7,6 +7,9 @@
     @foreach ($coreStyles as $style)
         <link rel="stylesheet" href="{{ $style }}">
     @endforeach
+    @foreach ($contentStyles as $style)
+        <link rel="stylesheet" href="{{ $style }}">
+    @endforeach
     <style>
         html, body { margin: 0; padding: 0; background: #fff; }
         .h5p-content { border: 0 !important; }
@@ -17,6 +20,12 @@
 
     <script>window.H5PIntegration = @json($integration);</script>
     @foreach ($coreScripts as $script)
+        <script src="{{ $script }}"></script>
+    @endforeach
+    {{-- Library scripts must load after core (which defines the H5P namespace
+         and H5P.newRunnable) so every content-type constructor is registered
+         before h5p.js auto-runs H5P.init on document-ready. --}}
+    @foreach ($contentScripts as $script)
         <script src="{{ $script }}"></script>
     @endforeach
 
