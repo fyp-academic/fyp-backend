@@ -46,7 +46,9 @@ class H5PService
         EditorStorage::$basePath = $this->filesPath;
 
         $this->framework        = new H5PFramework($this->filesPath, $this->filesUrl);
-        $this->core             = new H5PCore($this->framework, $this->filesPath, $this->filesUrl, 'en', true);
+        // Export disabled: we don't offer .h5p downloads, and the export path
+        // (zipping content + all libraries) is heavy/fragile on large packages.
+        $this->core             = new H5PCore($this->framework, $this->filesPath, $this->filesUrl, 'en', false);
         $this->validator        = new H5PValidator($this->framework, $this->core);
         $this->storage          = new H5PStorage($this->framework, $this->core);
         $this->contentValidator = new H5PContentValidator($this->framework, $this->core);
@@ -163,7 +165,27 @@ class H5PService
 
         $filtered     = $this->core->filterParameters($content);
         $dependencies = $this->core->loadContentDependencies($contentId, 'preloaded');
-        $files        = $this->core->getDependenciesFiles($dependencies);
+
+        // Self-heal: a content whose dependency cache is empty/stale (e.g. saved
+        // before this code, or whose first filter never persisted usage) would
+        // render with no library scripts → "Unable to find constructor". Force a
+        // fresh recompute by clearing the filtered cache and re-filtering.
+        if (empty($dependencies)) {
+            $this->framework->updateContentFields($contentId, ['filtered' => '']);
+            $fresh = $this->core->loadContent($contentId);
+            if ($fresh) {
+                $content  = $fresh;
+                $filtered = $this->core->filterParameters($content);
+            }
+            $dependencies = $this->core->loadContentDependencies($contentId, 'preloaded');
+            if (empty($dependencies)) {
+                \Illuminate\Support\Facades\Log::warning('H5P: no preloaded dependencies for content ' . $contentId . ' — its library may not be installed.', [
+                    'errors' => $this->framework->getMessages('error'),
+                ]);
+            }
+        }
+
+        $files = $this->core->getDependenciesFiles($dependencies);
 
         $contentScripts = $this->assetUrls($files['scripts']);
         $contentStyles  = $this->assetUrls($files['styles']);
