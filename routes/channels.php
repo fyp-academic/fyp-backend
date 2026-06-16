@@ -74,6 +74,13 @@ Broadcast::channel('conversation.{conversationId}', function ($user, string $con
     return false;
 });
 
+// Private per-user channel: a user may only subscribe to their own channel.
+// Backend broadcasts NotificationCreated on user.{userId}; the SPA subscribes
+// to user.{auth id}. Without this callback Laravel denies by default (403).
+Broadcast::channel('user.{userId}', function ($user, string $userId) {
+    return (string) $user->id === (string) $userId;
+});
+
 Broadcast::channel('session.{sessionId}', function ($user, string $sessionId) {
     $session = \App\Models\Session::find($sessionId);
     if (!$session) return false;

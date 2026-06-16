@@ -50,6 +50,24 @@
             ns.baseUrl           = '';
             ns.enableContentHub  = false;
 
+            // Host integration must provide getAjaxUrl (normally in
+            // h5peditor-init.js, which we don't load). Defined on the outer
+            // namespace; the editor form iframe inherits it via h5peditor.js's
+            // window.parent.H5PEditor copy.
+            ns.getAjaxUrl = function (action, parameters) {
+                var url = cfg.ajaxPath + action;
+                if (parameters !== undefined) {
+                    var sep = url.indexOf('?') === -1 ? '?' : '&';
+                    for (var p in parameters) {
+                        if (Object.prototype.hasOwnProperty.call(parameters, p)) {
+                            url += sep + p + '=' + parameters[p];
+                            sep = '&';
+                        }
+                    }
+                }
+                return url;
+            };
+
             var element = document.getElementById('h5p-editor');
             var editor  = new ns.Editor(LIBRARY, PARAMS, element);
 
