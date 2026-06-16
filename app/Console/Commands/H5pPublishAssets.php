@@ -7,14 +7,15 @@ use Illuminate\Support\Facades\File;
 
 /**
  * Publishes the H5P core + editor JS/CSS so the player and editor views can
- * load them over HTTP. Symlinks vendor/h5p/* into public/vendor/* (like
- * `storage:link`), or copies with --copy when symlinks aren't served.
+ * load them over HTTP. By default copies vendor/h5p/* into public/vendor/* as
+ * real files (portable — works regardless of whether the web server follows
+ * symlinks); pass --link to symlink instead.
  *
  * Run on deploy after `composer install`.
  */
 class H5pPublishAssets extends Command
 {
-    protected $signature = 'h5p:publish {--copy : Copy files instead of symlinking}';
+    protected $signature = 'h5p:publish {--link : Symlink instead of copying real files}';
 
     protected $description = 'Publish H5P core/editor assets into public/vendor';
 
@@ -43,10 +44,7 @@ class H5pPublishAssets extends Command
                 File::deleteDirectory($link);
             }
 
-            if ($this->option('copy')) {
-                File::copyDirectory($source, $link);
-                $this->info("Copied vendor/h5p/{$name} → public/vendor/{$name}");
-            } else {
+            if ($this->option('link')) {
                 @symlink($source, $link);
                 if (! is_link($link)) {
                     // Filesystem may not support symlinks — fall back to copy.
@@ -55,6 +53,9 @@ class H5pPublishAssets extends Command
                 } else {
                     $this->info("Linked public/vendor/{$name} → vendor/h5p/{$name}");
                 }
+            } else {
+                File::copyDirectory($source, $link);
+                $this->info("Copied vendor/h5p/{$name} → public/vendor/{$name}");
             }
         }
 
