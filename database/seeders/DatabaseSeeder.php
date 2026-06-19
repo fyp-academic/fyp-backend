@@ -16,5 +16,6 @@ class DatabaseSeeder extends Seeder
     {
         $this->call(AcademicStructureSeeder::class);
         $this->call(CreateAdminSeeder::class);
+        $this->call(BadgeSeeder::class);
     }
 }

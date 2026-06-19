@@ -126,6 +126,17 @@ class User extends Authenticatable
     }
 
     /**
+     * Role helper — roles are stored in the `role` string column
+     * ('student' | 'instructor' | 'admin'). Mirrors the `$user->role === '...'`
+     * checks used throughout the codebase so call sites that prefer hasRole()
+     * resolve consistently.
+     */
+    public function hasRole(string $role): bool
+    {
+        return $this->role === $role;
+    }
+
+    /**
      * Relationships
      */
     public function enrollments(): HasMany

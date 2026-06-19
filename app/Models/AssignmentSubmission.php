@@ -11,7 +11,7 @@ class AssignmentSubmission extends Model
     protected $keyType   = 'string';
 
     protected $fillable = [
-        'id', 'activity_id', 'student_id', 'course_id',
+        'id', 'activity_id', 'student_id', 'course_id', 'group_name',
         'status', 'submission_text', 'file_path', 'file_name',
         'file_size', 'submitted_at', 'grade', 'graded_by',
         'graded_at', 'feedback', 'attempt_number', 'late',

@@ -10,9 +10,12 @@ use App\Models\Course;
 use App\Models\GradeItem;
 use App\Models\StudentGrade;
 use App\Models\User;
+use App\Services\GradeService;
 
 class GradeController extends Controller
 {
+    public function __construct(private GradeService $grades) {}
+
     /**
      * GET /api/v1/courses/{id}/grades
      * Return all grade items and student submissions for a course.
@@ -88,23 +91,9 @@ class GradeController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        $student    = User::findOrFail($request->student_id);
-        $percentage = $gradeItem->grade_max > 0
-            ? round(($request->grade / $gradeItem->grade_max) * 100, 1)
-            : 0;
+        $student = User::findOrFail($request->student_id);
 
-        $sg = StudentGrade::updateOrCreate(
-            ['grade_item_id' => $id, 'student_id' => $request->student_id],
-            [
-                'id'             => Str::uuid()->toString(),
-                'student_name'   => $student->name,
-                'grade'          => $request->grade,
-                'percentage'     => $percentage,
-                'feedback'       => $request->input('feedback'),
-                'submitted_date' => now()->toDateString(),
-                'status'         => 'graded',
-            ]
-        );
+        $sg = $this->grades->recordGrade($gradeItem, $student, (float) $request->grade, $request->input('feedback'));
 
         return response()->json(['message' => 'Grade submitted.', 'data' => $sg], 201);
     }

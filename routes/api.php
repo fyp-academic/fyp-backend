@@ -136,6 +136,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/courses/{id}/join',   [CourseController::class, 'selfEnroll']);
         Route::delete('/courses/{id}/leave', [CourseController::class, 'selfUnenroll']);
         Route::get('/courses/{id}/my-grades', [GradeController::class, 'myGrades']);
+        Route::get('/courses/{id}/my-groups', [GroupController::class, 'myGroups']);
         Route::get('/categories', [CategoryController::class, 'index']);
 
         // ─────────────────────────────────────────────────────────────────────
@@ -180,6 +181,7 @@ Route::prefix('v1')->group(function () {
 
             // Groups Management (nested under course)
             Route::get('/{id}/groups',                                [GroupController::class, 'index']);
+            Route::post('/{id}/groups',                               [GroupController::class, 'store']);
             Route::get('/{id}/groups/{groupName}',                   [GroupController::class, 'show']);
             Route::post('/{id}/groups/{groupName}/add-student',      [GroupController::class, 'addStudent']);
             Route::delete('/{id}/groups/{groupName}/remove-student/{userId}', [GroupController::class, 'removeStudent']);
@@ -198,7 +200,11 @@ Route::prefix('v1')->group(function () {
 
             // Grades (nested under course)
             Route::get('/{id}/grades',                            [GradeController::class, 'index']);
+            Route::get('/{id}/gradebook',                         [GradeController::class, 'index']); // alias used by instructor UI
             Route::get('/{id}/grades/student/{studentId}',        [GradeController::class, 'studentGrades']);
+
+            // Question bank (course-level reusable questions)
+            Route::get('/{id}/question-bank',                     [QuizController::class, 'questionBank']);
 
             // AI Quiz Generator (nested under course)
             Route::prefix('/{id}/ai-quiz')->group(function () {
@@ -252,6 +258,7 @@ Route::prefix('v1')->group(function () {
 
             // Quiz questions nested under activity (admin only: create)
             Route::post('/{id}/questions', [QuizController::class, 'store']);
+            Route::post('/{id}/questions/from-bank', [QuizController::class, 'copyToActivity']);
 
             // Essay grading (instructor)
             Route::get('/{id}/essay-attempts', [QuizController::class, 'essayAttempts']);

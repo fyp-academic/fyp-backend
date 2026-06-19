@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use App\Models\Course;
+use App\Models\CourseGroup;
 use App\Models\Enrollment;
 use App\Models\User;
 
@@ -53,12 +54,18 @@ class GroupController extends Controller
         $authError = $this->authorizeInstructor($courseId);
         if ($authError) return $authError;
 
-        $course = Course::findOrFail($courseId);
+        Course::findOrFail($courseId);
 
-        // Get all unique groups from enrollments in this course
-        $enrollments = Enrollment::where('course_id', $courseId)->get();
-        
-        $groups = [];
+        // Seed the group map from persisted groups so empty groups still appear,
+        // then fold in any group names referenced only by enrollment membership.
+        $groups   = [];
+        $taskMode = [];
+        foreach (CourseGroup::where('course_id', $courseId)->get() as $cg) {
+            $groups[$cg->name]   = [];
+            $taskMode[$cg->name] = $cg->task_mode;
+        }
+
+        $enrollments = Enrollment::with('user')->where('course_id', $courseId)->get();
         foreach ($enrollments as $enrollment) {
             if ($enrollment->groups && is_array($enrollment->groups)) {
                 foreach ($enrollment->groups as $group) {
@@ -66,7 +73,7 @@ class GroupController extends Controller
                         $groups[$group] = [];
                     }
                     $groups[$group][] = [
-                        'user_id'     => $enrollment->user_id,
+                        'user_id'      => $enrollment->user_id,
                         'student_name' => $enrollment->user->name ?? 'Unknown',
                         'email'        => $enrollment->user->email ?? '',
                     ];
@@ -77,13 +84,43 @@ class GroupController extends Controller
         $result = [];
         foreach ($groups as $groupName => $members) {
             $result[] = [
-                'name'        => $groupName,
+                'name'         => $groupName,
+                'task_mode'    => $taskMode[$groupName] ?? 'none',
                 'member_count' => count($members),
-                'members'     => $members,
+                'members'      => $members,
             ];
         }
 
         return response()->json(['data' => $result, 'course_id' => $courseId]);
+    }
+
+    /**
+     * POST /api/v1/courses/{courseId}/groups
+     * Create a new (empty) group so it persists before any students are added.
+     */
+    public function store(Request $request, string $courseId): JsonResponse
+    {
+        $authError = $this->authorizeInstructor($courseId);
+        if ($authError) return $authError;
+
+        $validator = Validator::make($request->all(), [
+            'name' => 'required|string|max:255',
+        ]);
+
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        Course::findOrFail($courseId);
+
+        $group = CourseGroup::firstOrCreate(
+            ['course_id' => $courseId, 'name' => trim($request->name)],
+        );
+
+        return response()->json([
+            'message' => 'Group created.',
+            'data'    => ['name' => $group->name, 'task_mode' => $group->task_mode, 'member_count' => 0, 'members' => []],
+        ], 201);
     }
 
     /**
@@ -121,11 +158,14 @@ class GroupController extends Controller
             $currentGroups = [];
         }
 
+        // Ensure the group is persisted (so it survives even with no members)
+        CourseGroup::firstOrCreate(['course_id' => $courseId, 'name' => $groupName]);
+
         // Add group if not already member
         if (!in_array($groupName, $currentGroups)) {
             $currentGroups[] = $groupName;
             $enrollment->update(['groups' => $currentGroups]);
-            
+
             Log::info('Student added to group', [
                 'instructor_id' => $user->id,
                 'student_id' => $request->user_id,
@@ -211,6 +251,8 @@ class GroupController extends Controller
             $enrollment->update(['groups' => $currentGroups]);
         }
 
+        CourseGroup::where('course_id', $courseId)->where('name', $groupName)->delete();
+
         Log::info('Group deleted', [
             'instructor_id' => $user->id,
             'course_id' => $courseId,
@@ -262,6 +304,10 @@ class GroupController extends Controller
             $enrollment->update(['groups' => $currentGroups]);
         }
 
+        // Keep the persisted group in sync (avoid colliding with an existing target name)
+        CourseGroup::where('course_id', $courseId)->where('name', $newName)->delete();
+        CourseGroup::where('course_id', $courseId)->where('name', $groupName)->update(['name' => $newName]);
+
         Log::info('Group renamed', [
             'instructor_id' => $user->id,
             'course_id' => $courseId,
@@ -272,6 +318,26 @@ class GroupController extends Controller
         ]);
 
         return response()->json(['message' => 'Group renamed.']);
+    }
+
+    /**
+     * GET /api/v1/courses/{courseId}/my-groups
+     * Return the authenticated student's own group names for a course.
+     */
+    public function myGroups(string $courseId): JsonResponse
+    {
+        $user = Auth::user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        $enrollment = Enrollment::where('course_id', $courseId)
+            ->where('user_id', $user->id)
+            ->first();
+
+        $groups = ($enrollment && is_array($enrollment->groups)) ? array_values($enrollment->groups) : [];
+
+        return response()->json(['data' => $groups, 'course_id' => $courseId]);
     }
 
     /**

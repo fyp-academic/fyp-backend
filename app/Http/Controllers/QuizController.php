@@ -53,6 +53,66 @@ class QuizController extends Controller
     }
 
     /**
+     * GET /api/v1/courses/{courseId}/question-bank
+     * Course-level reusable question bank, grouped by category (Moodle-style).
+     */
+    public function questionBank(string $courseId): JsonResponse
+    {
+        $questions = QuizQuestion::where('course_id', $courseId)
+            ->with('answers')
+            ->orderBy('category')
+            ->orderBy('created_at')
+            ->get();
+
+        $categories = $questions
+            ->groupBy(fn ($q) => $q->category ?: 'Uncategorized')
+            ->map(fn ($items, $cat) => [
+                'category'  => $cat,
+                'count'     => $items->count(),
+                'questions' => $items->values(),
+            ])
+            ->values();
+
+        return response()->json([
+            'data'      => $categories,
+            'total'     => $questions->count(),
+            'course_id' => $courseId,
+        ]);
+    }
+
+    /**
+     * POST /api/v1/activities/{activityId}/questions/from-bank
+     * Reuse an existing bank question by copying it (and its answers) into a quiz.
+     */
+    public function copyToActivity(Request $request, string $activityId): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'source_question_id' => 'required|string|exists:quiz_questions,id',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $activity = Activity::findOrFail($activityId);
+        $source   = QuizQuestion::with('answers')->findOrFail($request->source_question_id);
+
+        $copy              = $source->replicate();
+        $copy->id          = Str::uuid()->toString();
+        $copy->activity_id = $activityId;
+        $copy->course_id   = $activity->course_id;
+        $copy->save();
+
+        foreach ($source->answers as $a) {
+            $ca              = $a->replicate();
+            $ca->id          = Str::uuid()->toString();
+            $ca->question_id = $copy->id;
+            $ca->save();
+        }
+
+        return response()->json(['message' => 'Question added to quiz.', 'data' => $copy->load('answers')], 201);
+    }
+
+    /**
      * POST /api/v1/activities/{id}/questions
      * Add a new question to a quiz activity's question bank.
      */

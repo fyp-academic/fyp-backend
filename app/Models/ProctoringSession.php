@@ -15,7 +15,7 @@ class ProctoringSession extends Model
     protected $fillable = [
         'id', 'student_id', 'activity_id', 'course_id',
         'context_type', 'quiz_attempt_id', 'assignment_submission_id',
-        'status', 'violation_count', 'is_flagged',
+        'status', 'violation_count', 'auto_submit_threshold', 'is_flagged',
         'started_at', 'ended_at',
     ];
 

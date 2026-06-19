@@ -8,9 +8,12 @@ use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use App\Models\UserPreference;
+use App\Services\BadgeService;
 
 class ProfileController extends Controller
 {
+    public function __construct(private BadgeService $badges) {}
+
     /**
      * GET /api/v1/profile
      * Return the full profile for the authenticated user with related data.
@@ -52,6 +55,13 @@ class ProfileController extends Controller
         // Map fields to match frontend expectations
         $profileData['registration_no'] = $user->registration_number;
         $profileData['phone'] = $user->phone_number;
+
+        // Badges/achievements — evaluate (awards any newly-earned, backfills existing users)
+        // then return the earned set for the profile "achievements" list.
+        if ($user->role === 'student') {
+            $this->badges->evaluate($user);
+            $profileData['achievements'] = $this->badges->earnedFor($user);
+        }
 
         return response()->json(['data' => $profileData]);
     }

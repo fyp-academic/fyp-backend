@@ -25,24 +25,26 @@ class ProctoringController extends Controller
     public function start(Request $request): JsonResponse
     {
         $request->validate([
-            'activity_id'      => 'required|string',
-            'course_id'        => 'nullable|string',
-            'context_type'     => 'sometimes|string|in:quiz,assignment',
-            'quiz_attempt_id'  => 'nullable|string',
+            'activity_id'           => 'required|string',
+            'course_id'             => 'nullable|string',
+            'context_type'          => 'sometimes|string|in:quiz,assignment',
+            'quiz_attempt_id'       => 'nullable|string',
+            'auto_submit_threshold' => 'sometimes|integer|min:1|max:20',
         ]);
 
         $user = Auth::user();
 
         $session = ProctoringSession::create([
-            'student_id'       => $user->id,
-            'activity_id'      => $request->activity_id,
-            'course_id'        => $request->course_id,
-            'context_type'     => $request->input('context_type', 'quiz'),
-            'quiz_attempt_id'  => $request->quiz_attempt_id,
-            'status'           => 'active',
-            'violation_count'  => 0,
-            'is_flagged'       => false,
-            'started_at'       => now(),
+            'student_id'            => $user->id,
+            'activity_id'           => $request->activity_id,
+            'course_id'             => $request->course_id,
+            'context_type'          => $request->input('context_type', 'quiz'),
+            'quiz_attempt_id'       => $request->quiz_attempt_id,
+            'status'                => 'active',
+            'violation_count'       => 0,
+            'auto_submit_threshold' => $request->input('auto_submit_threshold', self::AUTO_SUBMIT_THRESHOLD),
+            'is_flagged'            => false,
+            'started_at'            => now(),
         ]);
 
         return response()->json(['session_id' => $session->id], 201);
@@ -68,11 +70,12 @@ class ProctoringController extends Controller
 
         $session->increment('violation_count');
         $session->refresh();
-        $count = $session->violation_count;
+        $count     = $session->violation_count;
+        $threshold = $session->auto_submit_threshold ?: self::AUTO_SUBMIT_THRESHOLD;
 
         $action = match (true) {
-            $count >= self::AUTO_SUBMIT_THRESHOLD => 'force_submit',
-            $count === self::AUTO_SUBMIT_THRESHOLD - 1 => 'final_warning',
+            $count >= $threshold     => 'force_submit',
+            $count === $threshold - 1 => 'final_warning',
             default => 'warn',
         };
 

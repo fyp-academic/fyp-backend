@@ -9,12 +9,18 @@ use Illuminate\Support\Str;
 use App\Models\Activity;
 use App\Models\AssignmentSubmission;
 use App\Models\CognitiveSignal;
+use App\Models\Enrollment;
+use App\Models\User;
 use App\Services\EngagementComputationService;
+use App\Services\GradeService;
 use Illuminate\Support\Facades\Log;
 
 class AssignmentController extends Controller
 {
-    public function __construct(private EngagementComputationService $engagement) {}
+    public function __construct(
+        private EngagementComputationService $engagement,
+        private GradeService $grades,
+    ) {}
 
     /**
      * GET /api/v1/activities/{id}/submissions
@@ -70,16 +76,38 @@ class AssignmentController extends Controller
             return response()->json(['errors' => $validator->errors()], 422);
         }
 
-        // Validate that at least one submission type is provided
-        $hasText = !empty($request->input('submission_text'));
-        $hasFile = $request->hasFile('file') || !empty($request->input('file_path'));
-        
-        if (!$hasText && !$hasFile) {
-            return response()->json(['errors' => ['submission' => 'Please provide either submission text or a file.']], 422);
-        }
-
         $activity = Activity::findOrFail($id);
         $user     = $request->user();
+
+        $hasText = !empty($request->input('submission_text'));
+        $hasFile = $request->hasFile('file') || !empty($request->input('file_path'));
+
+        // Enforce the instructor's configured submission modality.
+        $settings    = is_array($activity->settings) ? $activity->settings : [];
+        $textEnabled = (bool) ($settings['textOnlineEnabled'] ?? false);
+        $fileEnabled = (bool) ($settings['fileSubmissionEnabled'] ?? true);
+
+        if ($hasText && !$textEnabled) {
+            return response()->json(['errors' => ['submission_text' => 'Text submissions are not allowed for this assignment.']], 422);
+        }
+        if ($hasFile && !$fileEnabled) {
+            return response()->json(['errors' => ['file' => 'File submissions are not allowed for this assignment.']], 422);
+        }
+        if (!$hasText && !$hasFile) {
+            $allowed = [];
+            if ($textEnabled) $allowed[] = 'text';
+            if ($fileEnabled) $allowed[] = 'a file';
+            $hint = $allowed ? implode(' or ', $allowed) : 'a submission';
+            return response()->json(['errors' => ['submission' => "Please provide {$hint}."]], 422);
+        }
+
+        // Tag the submission with the student's group (if any) for group tasks.
+        $enrollment = Enrollment::where('course_id', $activity->course_id)
+            ->where('user_id', $user->id)
+            ->first();
+        $groupName = ($enrollment && is_array($enrollment->groups) && count($enrollment->groups))
+            ? $enrollment->groups[0]
+            : null;
 
         $lastAttempt = AssignmentSubmission::where('activity_id', $id)
             ->where('student_id', $user->id)
@@ -103,6 +131,7 @@ class AssignmentController extends Controller
             'activity_id'     => $id,
             'student_id'      => $user->id,
             'course_id'       => $activity->course_id,
+            'group_name'      => $groupName,
             'status'          => 'submitted',
             'submission_text' => $request->input('submission_text'),
             'file_path'       => $filePath,
@@ -212,6 +241,18 @@ class AssignmentController extends Controller
             'graded_at' => now(),
             'status'    => 'graded',
         ]);
+
+        // Mirror the grade into the course grade book so the student sees it via my-grades.
+        try {
+            $activity = Activity::find($submission->activity_id);
+            $student  = User::find($submission->student_id);
+            if ($activity && $student) {
+                $gradeItem = $this->grades->gradeItemForActivity($activity);
+                $this->grades->recordGrade($gradeItem, $student, (float) $request->grade, $request->input('feedback'));
+            }
+        } catch (\Throwable $e) {
+            Log::warning('Grade book: failed to mirror assignment grade', ['submission' => $id, 'error' => $e->getMessage()]);
+        }
 
         return response()->json(['message' => 'Submission graded.', 'data' => $submission]);
     }
