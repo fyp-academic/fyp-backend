@@ -1,9 +1,9 @@
-APES UDOM - AI Powered E-Learning System
+APES LMS - AI Personalization eLearning
 ==========================================
 
 Hello, {{ $userName }},
 
-Thank you for registering on APES UDOM. To complete your account setup
+Thank you for registering on APES LMS. To complete your account setup
 and unlock full access to all learning resources, please use the
 verification code below.
 
@@ -16,4 +16,4 @@ If you did not create an account, you can safely ignore this email.
 
 Need help? Contact us at codagenz10@gmail.com
 
-Apes Udom · Tanzania
+APES LMS · Tanzania

@@ -23,15 +23,15 @@ class PasswordResetOtpMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Password Reset Code - APES UDOM',
+            subject: 'Password Reset Code - APES LMS',
             from: new Address(
                 config('mail.from.address', 'noreply@codagenz.com'),
-                config('mail.from.name', 'APES UDOM')
+                config('mail.from.name', 'APES LMS')
             ),
             replyTo: [
                 new Address(
                     config('mail.reply_to.address', 'codagenz10@gmail.com'),
-                    config('mail.reply_to.name', 'APES UDOM Support')
+                    config('mail.reply_to.name', 'APES LMS Support')
                 ),
             ],
         );

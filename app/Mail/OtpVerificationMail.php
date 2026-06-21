@@ -23,15 +23,15 @@ class OtpVerificationMail extends Mailable
     public function envelope(): Envelope
     {
         return new Envelope(
-            subject: 'Your APES UDOM Verification Code',
+            subject: 'Your APES LMS Verification Code',
             from: new Address(
                 config('mail.from.address', 'noreply@codagenz.com'),
-                config('mail.from.name', 'APES UDOM')
+                config('mail.from.name', 'APES LMS')
             ),
             replyTo: [
                 new Address(
                     config('mail.reply_to.address', 'codagenz10@gmail.com'),
-                    config('mail.reply_to.name', 'APES UDOM Support')
+                    config('mail.reply_to.name', 'APES LMS Support')
                 ),
             ],
         );
