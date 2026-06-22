@@ -299,4 +299,78 @@ class AssignmentController extends Controller
 
         return response()->json(['data' => $submissions]);
     }
+
+    /**
+     * GET /api/v1/my-group-works
+     * For the authenticated student, return — per course where the student belongs to a group —
+     * the assignment tasks together with every group member's submission for each task.
+     */
+    public function myGroupWorks(Request $request): JsonResponse
+    {
+        $user = $request->user();
+
+        // Courses where the student belongs to at least one group.
+        $enrollments = Enrollment::where('user_id', $user->id)
+            ->whereNotNull('groups')
+            ->with('course')
+            ->get()
+            ->filter(fn ($e) => is_array($e->groups) && count($e->groups) > 0);
+
+        $result = [];
+
+        foreach ($enrollments as $enrollment) {
+            $groups = array_values($enrollment->groups);
+
+            // Assignment-type tasks in this course.
+            $activities = Activity::where('course_id', $enrollment->course_id)
+                ->where('type', 'assignment')
+                ->where('visible', true)
+                ->orderBy('sort_order')
+                ->get();
+
+            if ($activities->isEmpty()) {
+                continue;
+            }
+
+            $tasks = $activities->map(function ($activity) use ($user, $groups) {
+                // All submissions made by members of the student's group(s) for this task.
+                $groupSubmissions = AssignmentSubmission::where('activity_id', $activity->id)
+                    ->whereIn('group_name', $groups)
+                    ->with('student')
+                    ->orderBy('submitted_at', 'desc')
+                    ->get();
+
+                $mine = $groupSubmissions->firstWhere('student_id', $user->id);
+
+                return [
+                    'activity_id' => $activity->id,
+                    'title'       => $activity->name,
+                    'due_date'    => $activity->due_date,
+                    'my_status'   => $mine?->status ?? 'not_submitted',
+                    'my_grade'    => $mine?->grade,
+                    'submissions' => $groupSubmissions->map(fn ($s) => [
+                        'id'           => $s->id,
+                        'student_id'   => $s->student_id,
+                        'student_name' => $s->student?->name ?? 'Unknown',
+                        'group_name'   => $s->group_name,
+                        'status'       => $s->status,
+                        'grade'        => $s->grade,
+                        'file_name'    => $s->file_name,
+                        'file_url'     => $s->file_path ? asset('storage/' . $s->file_path) : null,
+                        'submitted_at' => $s->submitted_at,
+                        'is_mine'      => $s->student_id === $user->id,
+                    ])->values(),
+                ];
+            })->values();
+
+            $result[] = [
+                'course_id'   => $enrollment->course_id,
+                'course_name' => $enrollment->course?->name ?? 'Unknown',
+                'group_name'  => implode(', ', $groups),
+                'tasks'       => $tasks,
+            ];
+        }
+
+        return response()->json(['data' => $result]);
+    }
 }

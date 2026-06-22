@@ -586,6 +586,7 @@ Route::middleware('auth:sanctum')->prefix('interventions')->group(function () {
 // Assignment submissions
 Route::middleware('auth:sanctum')->post('activities/{id}/submissions', [AssignmentController::class, 'store']);
 Route::middleware('auth:sanctum')->get('my-submissions', [AssignmentController::class, 'mySubmissions']);
+Route::middleware('auth:sanctum')->get('my-group-works', [AssignmentController::class, 'myGroupWorks']);
 Route::middleware('auth:sanctum')->get('submissions/{id}', [AssignmentController::class, 'show']);
 Route::middleware('auth:sanctum')->put('submissions/{id}/grade', [AssignmentController::class, 'grade']);
 
