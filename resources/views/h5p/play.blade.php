@@ -52,19 +52,28 @@
                     if (['completed', 'answered', 'passed', 'failed'].indexOf(verb) === -1) { return; }
 
                     var statement = event.data && event.data.statement;
-                    if (! statement || ! statement.result || ! statement.result.score) { return; }
+                    if (! statement) { return; }
 
                     // Only the top-level statement (sub-content has a parent context).
                     var ctx = statement.context && statement.context.contextActivities;
                     if (ctx && ctx.parent && ctx.parent.length) { return; }
 
-                    var raw = statement.result.score.raw;
-                    var max = statement.result.score.max;
-                    if (raw == null || max == null) { return; }
-
                     var finished = (verb === 'completed' || verb === 'passed' || verb === 'failed');
-                    report(raw, max, finished);
-                    sent = true;
+                    var score = statement.result && statement.result.score;
+
+                    if (score && score.raw != null && score.max != null) {
+                        // Graded content (quiz / questions) — report the real score.
+                        report(score.raw, score.max, finished);
+                        sent = true;
+                    } else if (score && score.scaled != null) {
+                        // Some types only emit a scaled (0–1) score.
+                        report(Math.round(score.scaled * 100), 100, finished);
+                        sent = true;
+                    } else if (finished && ! sent) {
+                        // Reading-only content (e.g. Interactive Book read to its summary)
+                        // emits no score — report completion so it can be graded on it.
+                        report(null, 0, true);
+                    }
                 } catch (e) {}
             });
             return true;

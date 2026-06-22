@@ -345,6 +345,16 @@ class H5PController extends Controller
         $maxScore = (float) $request->input('max_score', 0);
         $finished = (bool) $request->input('finished', false);
 
+        // A scoreless completion ping (reading-only content) must never wipe a
+        // quiz score that was already captured for this content/user.
+        $existing = DB::table('h5p_results')
+            ->where(['content_id' => $session['content_id'], 'user_id' => $session['user_id']])
+            ->first();
+        if ($maxScore <= 0 && $existing && $existing->max_score > 0) {
+            $score    = (float) $existing->score;
+            $maxScore = (float) $existing->max_score;
+        }
+
         DB::table('h5p_results')->updateOrInsert(
             ['content_id' => $session['content_id'], 'user_id' => $session['user_id']],
             [
@@ -359,7 +369,12 @@ class H5PController extends Controller
         $activity = Activity::find($session['activity_id']);
         if ($activity) {
             if ($maxScore > 0) {
+                // Graded content (questions/quiz) → record the real score.
                 $this->resultService->recordScore($activity, $session['user_id'], $score, $maxScore);
+            } elseif ($finished) {
+                // Reading-only content (no scorable questions) → completion credit = full marks.
+                $gradeMax = (float) ($activity->grade_max ?? 0) ?: 100;
+                $this->resultService->recordScore($activity, $session['user_id'], $gradeMax, $gradeMax);
             }
             $this->resultService->recordCompletion($activity, $session['user_id'], $finished ? 'completed' : 'attempted');
         }
