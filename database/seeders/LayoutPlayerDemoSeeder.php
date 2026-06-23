@@ -10,6 +10,7 @@ use App\Models\CourseMaterial;
 use App\Models\DegreeProgramme;
 use App\Models\Enrollment;
 use App\Models\LearnerProfile;
+use App\Models\LessonPage;
 use App\Models\Section;
 use App\Models\StudentProfile;
 use App\Models\User;
@@ -55,8 +56,28 @@ class LayoutPlayerDemoSeeder extends Seeder
         $this->command->info('Seeding Layout-Player demo (4 students, 1 course)...');
 
         $instructor = $this->resolveInstructor();
-        $college    = College::where('code', 'CIVE')->first();
-        $programme  = DegreeProgramme::where('code', 'BSC-SE')->first();
+
+        // Isolated demo programme so the demo course never appears for real students.
+        // Student course ACCESS is granted by degree programme (not enrolment), so the
+        // four students + the course must share this programme.
+        $college = College::where('code', 'CIVE')->first();
+        if (! $college) {
+            $college = new College();
+            $college->forceFill([
+                'id'   => Str::uuid()->toString(),
+                'name' => 'College of Informatics and Virtual Education',
+                'code' => 'CIVE',
+            ])->save();
+        }
+        $programme = DegreeProgramme::where('code', 'DEMO-PROG')->first() ?? new DegreeProgramme();
+        $programme->forceFill([
+            'id'             => $programme->id ?? Str::uuid()->toString(),
+            'college_id'     => $college->id,
+            'name'           => 'Adaptive Learning Demo Programme',
+            'code'           => 'DEMO-PROG',
+            'description'    => 'Isolated programme used only by the layout-player demo.',
+            'duration_years' => 1,
+        ])->save();
 
         // ── 1. Course ────────────────────────────────────────────────────────
         $course = Course::firstOrNew(['short_name' => 'DEMO-AI']);
@@ -80,6 +101,14 @@ class LayoutPlayerDemoSeeder extends Seeder
             'enrolled_students' => 4,
         ])->save();
 
+        // Link course → demo programme so enrolled students can actually open it.
+        if (! DB::table('course_degree_programme')->where('course_id', $course->id)->where('degree_programme_id', $programme->id)->exists()) {
+            DB::table('course_degree_programme')->insert([
+                'course_id'           => $course->id,
+                'degree_programme_id' => $programme->id,
+            ]);
+        }
+
         // ── 2. Section ───────────────────────────────────────────────────────
         $section = Section::firstOrNew(['course_id' => $course->id, 'title' => 'Module 01 — Understanding Personalization']);
         $section->forceFill([
@@ -91,7 +120,26 @@ class LayoutPlayerDemoSeeder extends Seeder
             'visible'    => true,
         ])->save();
 
-        // ── 3. Demo lesson (video activity) — mounts the adaptive players ─────
+        // ── 3a. The star: a strong TEXT lesson page (renders via the 4 players) ─
+        $readingActivity = Activity::firstOrNew([
+            'section_id' => $section->id,
+            'course_id'  => $course->id,
+            'name'       => 'Reading: How a Web Page Loads (HTTP Request Lifecycle)',
+        ]);
+        $readingActivity->forceFill([
+            'id'          => $readingActivity->id ?? Str::uuid()->toString(),
+            'section_id'  => $section->id,
+            'course_id'   => $course->id,
+            'type'        => 'lesson',
+            'name'        => 'Reading: How a Web Page Loads (HTTP Request Lifecycle)',
+            'description' => 'A single, media-free reading delivered in each learner\'s optimal layout.',
+            'visible'     => true,
+            'grade_max'   => 0,
+            'sort_order'  => 0,
+        ])->save();
+        $this->seedTextLessonPage($readingActivity);
+
+        // ── 3b. Demo lesson (video activity) — also mounts the adaptive players ─
         $lessonActivity = Activity::firstOrNew([
             'section_id' => $section->id,
             'course_id'  => $course->id,
@@ -106,7 +154,7 @@ class LayoutPlayerDemoSeeder extends Seeder
             'description' => 'A short lesson with personalized notes rendered in each learner\'s optimal layout.',
             'visible'     => true,
             'grade_max'   => 0,
-            'sort_order'  => 0,
+            'sort_order'  => 1,
             'settings'    => [
                 // A stable, embeddable educational video (3Blue1Brown — neural networks).
                 'videoUrl' => 'https://www.youtube.com/watch?v=aircAruvnKk',
@@ -131,7 +179,7 @@ class LayoutPlayerDemoSeeder extends Seeder
             'description' => 'A short check that establishes each learner\'s baseline.',
             'visible'     => true,
             'grade_max'   => 100,
-            'sort_order'  => 1,
+            'sort_order'  => 2,
         ])->save();
 
         // ── 6. The four personas ─────────────────────────────────────────────
@@ -198,6 +246,92 @@ class LayoutPlayerDemoSeeder extends Seeder
         ])->save();
 
         return $instructor;
+    }
+
+    /**
+     * One strong, media-free lesson page + its lesson_page chunks. Because the page
+     * has no media, the student player delivers it through the four layout players —
+     * the same content reshaped per learner (steps / tables / dense prose / example).
+     */
+    private function seedTextLessonPage(Activity $activity): void
+    {
+        // HTML kept for any non-personalized fallback render.
+        $html = '<h2>How a Web Page Loads</h2>'
+            . '<p>When you type a URL and press Enter, a precise sequence runs in well under a second. '
+            . 'Understanding it explains everything from slow sites to login sessions.</p>'
+            . '<h3>The request–response cycle</h3>'
+            . '<ol>'
+            . '<li><strong>DNS lookup</strong> — the domain name is translated into an IP address.</li>'
+            . '<li><strong>TCP connection</strong> — your browser opens a connection to that server.</li>'
+            . '<li><strong>HTTP request</strong> — the browser asks for the page with <code>GET /</code>.</li>'
+            . '<li><strong>Server response</strong> — the server returns HTML, CSS, and JavaScript.</li>'
+            . '<li><strong>Rendering</strong> — the browser paints the page and runs the scripts.</li>'
+            . '</ol>'
+            . '<h2>Key HTTP methods</h2>'
+            . '<table><thead><tr><th>Method</th><th>Purpose</th><th>Changes data?</th></tr></thead>'
+            . '<tbody>'
+            . '<tr><td>GET</td><td>Retrieve a resource</td><td>No</td></tr>'
+            . '<tr><td>POST</td><td>Create a resource</td><td>Yes</td></tr>'
+            . '<tr><td>PUT</td><td>Replace a resource</td><td>Yes</td></tr>'
+            . '<tr><td>DELETE</td><td>Remove a resource</td><td>Yes</td></tr>'
+            . '</tbody></table>'
+            . '<h3>A worked example</h3>'
+            . '<p>Imagine submitting a login form. The browser sends a <strong>POST</strong> request with your '
+            . 'credentials; the server verifies them and replies with a session token. From then on, each '
+            . '<strong>GET</strong> request carries that token, so the server knows it is still you.</p>';
+
+        $page = LessonPage::firstOrNew(['activity_id' => $activity->id, 'title' => 'How a Web Page Loads']);
+        $page->forceFill([
+            'id'         => $page->id ?? Str::uuid()->toString(),
+            'activity_id'=> $activity->id,
+            'title'      => 'How a Web Page Loads',
+            'content'    => $html,
+            'page_type'  => 'content',
+            'sort_order' => 0,
+        ])->save();
+
+        // Markdown chunks (SafeMarkdown renders tables/lists/bold) — the players reshape these.
+        $chunks = [
+            "## How a Web Page Loads\n\n"
+                . "When you type a URL and press Enter, a precise sequence runs in well under a second. "
+                . "Understanding it explains everything from slow sites to login sessions.\n\n"
+                . "### The request–response cycle\n\n"
+                . "1. **DNS lookup** — the domain name is translated into an IP address.\n"
+                . "2. **TCP connection** — your browser opens a connection to that server.\n"
+                . "3. **HTTP request** — the browser asks for the page with `GET /`.\n"
+                . "4. **Server response** — the server returns HTML, CSS, and JavaScript.\n"
+                . "5. **Rendering** — the browser paints the page and runs the scripts.\n",
+            "## Key HTTP methods\n\n"
+                . "| Method | Purpose | Changes data? |\n"
+                . "| --- | --- | --- |\n"
+                . "| GET | Retrieve a resource | No |\n"
+                . "| POST | Create a resource | Yes |\n"
+                . "| PUT | Replace a resource | Yes |\n"
+                . "| DELETE | Remove a resource | Yes |\n\n"
+                . "### A worked example\n\n"
+                . "Imagine submitting a login form. The browser sends a **POST** request with your credentials; "
+                . "the server verifies them and replies with a session token. From then on, each **GET** request "
+                . "carries that token, so the server knows it is still you.\n",
+        ];
+
+        foreach ($chunks as $i => $text) {
+            $chunk = ContentChunk::firstOrNew([
+                'content_source' => 'lesson_page',
+                'content_id'     => $page->id,
+                'chunk_index'    => $i,
+            ]);
+            $chunk->forceFill([
+                'id'                  => $chunk->id ?? Str::uuid()->toString(),
+                'content_source'      => 'lesson_page',
+                'content_id'          => $page->id,
+                'chunk_index'         => $i,
+                'chunk_text'          => $text,
+                'chunk_type'          => 'lecture',
+                'semantic_role'       => $i === 0 ? 'concept' : 'example',
+                'key_terms'           => $i === 0 ? ['DNS', 'TCP', 'HTTP request'] : ['GET', 'POST', 'session token'],
+                'lesson_position_pct' => $i === 0 ? 25 : 80,
+            ])->save();
+        }
     }
 
     private function seedAdaptableContent(string $courseId, Activity $activity): void
@@ -365,7 +499,7 @@ class LayoutPlayerDemoSeeder extends Seeder
         $this->command->info('Password for all students: @demo123');
         $this->command->info('');
         $this->command->info('Open each student → My Courses → this course → Module 01 →');
-        $this->command->info('"Lesson: How Adaptive Learning..." to see their layout player:');
+        $this->command->info('"Reading: How a Web Page Loads" to see the SAME page in their layout player:');
         foreach ($personas as $p) {
             $this->command->info(sprintf('  • %-28s → %s', $p['email'], $p['player']));
         }
