@@ -99,6 +99,8 @@ class LayoutPlayerDemoSeeder extends Seeder
             'tags'            => json_encode(['demo', 'personalization', 'adaptive']),
             'max_students'    => 50,
             'enrolled_students' => 4,
+            // Absolute image URL so the enrolled-list / catalog cards show a cover image.
+            'image'           => 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1200&q=80',
         ])->save();
 
         // Link course → demo programme so enrolled students can actually open it.
