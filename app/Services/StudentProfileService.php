@@ -183,8 +183,8 @@ class StudentProfileService
             return 0;
         }
 
+        // Each row is a completion (no boolean `completed` column exists).
         $completed = UserActivityCompletion::where('user_id', $studentId)
-            ->where('completed', true)
             ->distinct('activity_id')
             ->count('activity_id');
 

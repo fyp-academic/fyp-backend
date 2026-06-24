@@ -275,11 +275,12 @@ class PersonalizationContextService
             return true;
         }
 
+        // Each row in user_activity_completions is itself a completion (no boolean
+        // `completed` column exists — only completion_type/completed_at).
         $completions = DB::table('user_activity_completions')
             ->join('activities', 'user_activity_completions.activity_id', '=', 'activities.id')
             ->join('sections', 'activities.section_id', '=', 'sections.id')
             ->where('user_activity_completions.user_id', $studentId)
-            ->where('user_activity_completions.completed', true)
             ->where('sections.course_id', $courseId)
             ->distinct('user_activity_completions.activity_id')
             ->count('user_activity_completions.activity_id');

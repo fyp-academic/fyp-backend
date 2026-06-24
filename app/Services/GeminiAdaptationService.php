@@ -61,9 +61,9 @@ class GeminiAdaptationService
                 ],
             ],
             'generationConfig' => [
-                'temperature' => 0.2,
+                'temperature' => 0.4,
                 'maxOutputTokens' => $maxTokens,
-                'topP' => 0.75,
+                'topP' => 0.85,
             ],
             'systemInstruction' => [
                 'parts' => [['text' => $systemPrompt]],
@@ -165,7 +165,8 @@ class GeminiAdaptationService
     {
         $wordCount = str_word_count(strip_tags($originalText));
         $maxDifficulty = (int) ($settings['max_difficulty'] ?? 5);
-        $scaled = (int) min(800, max(200, $wordCount * (2 + ($maxDifficulty * 0.3))));
+        // Headroom for enrichment (worked scenario / analogy ~2x original) plus markdown overhead.
+        $scaled = (int) min(1400, max(200, $wordCount * (3 + ($maxDifficulty * 0.4))));
 
         return $scaled;
     }
@@ -185,16 +186,20 @@ INSTRUCTOR SOURCE IS IMMUTABLE:
 - You produce a separate student-facing delivery copy derived only from the provided original.
 - Learning objectives, facts, scope, and assessments must remain equivalent to the original.
 
+WHAT YOU MAY CHANGE vs MUST PRESERVE:
+- PRESERVE (never alter): facts, figures, definitions, the pedagogical objective, assessment intent, and the set of concepts taught. You add no new facts, no new topics, no new data, no URLs, and no citations.
+- MAY CHANGE: phrasing, order, depth of explanation, scaffolding, emphasis — and, when the ENRICHMENT block below permits it, you MAY add a short illustrative scenario or analogy whose only purpose is to make a concept ALREADY in the original easier to grasp. Enrichment illustrates the existing material; it must not introduce new factual content or extend the scope of what is taught.
+
 STRICT RULES:
-1. Use ONLY information present in the original content. No new facts, topics, examples, URLs, or citations.
+1. Every fact, figure, definition, and concept in your output must trace back to the original content. Illustrative scenarios/analogies (when permitted) may use everyday framing but must not assert any new fact about the subject.
 2. Do not change the pedagogical objective or assessment intent.
 3. Never rewrite, hint at, or paraphrase quiz/assessment questions.
 4. Preserve technical terms and definitions exactly as written unless instructor permissions allow simplification of surrounding prose only.
-5. If the original already fits the student profile, return it with minimal or no changes.
+5. If the original already fits the student profile and no enrichment is requested, return it with minimal or no changes.
 6. Output markdown body only — no preamble, labels, or meta commentary.
-7. For "visual" delivery: reorganize existing sentences into markdown tables or bullet lists using existing words only — do not invent diagram content.
-8. For "example-based" delivery: lead with an example only if one already exists in the original; otherwise use clearest existing illustration.
-9. "Advanced depth" means surface relationships between concepts already stated — never introduce new concepts.
+7. For "visual" delivery: reorganize existing sentences into markdown tables or bullet lists — do not invent diagram content.
+8. For "example-based" delivery: lead with an example. Prefer one already in the original; if none exists and enrichment is permitted, you may add a short illustrative scenario that demonstrates the existing concept without adding new facts.
+9. "Advanced depth" means surface relationships between concepts already stated, and — when enrichment is permitted — anchor them with one concise worked scenario or analogy. Never introduce new concepts.
 10. Never repeat scaffolding, context, or term definitions already established in earlier chunks of the same lesson. The LESSON CONTEXT block (when present) tells you what came before — honour it.
 TXT;
     }
@@ -215,14 +220,27 @@ TXT;
         $minDifficulty = (int) ($settings['min_difficulty'] ?? 1);
         $maxDifficulty = (int) ($settings['max_difficulty'] ?? 5);
 
-        $allowSimplification = ($settings['allow_simplification'] ?? true) ? 'yes' : 'no';
-        $allowExampleSubstitution = ($settings['allow_example_substitution'] ?? true) ? 'yes' : 'no';
-        $allowAnalogies = ($settings['allow_analogies'] ?? true) ? 'yes' : 'no';
+        $allowSimplificationBool = (bool) ($settings['allow_simplification'] ?? true);
+        $allowExampleSubstitutionBool = (bool) ($settings['allow_example_substitution'] ?? true);
+        $allowAnalogiesBool = (bool) ($settings['allow_analogies'] ?? true);
+        $allowSimplification = $allowSimplificationBool ? 'yes' : 'no';
+        $allowExampleSubstitution = $allowExampleSubstitutionBool ? 'yes' : 'no';
+        $allowAnalogies = $allowAnalogiesBool ? 'yes' : 'no';
         $lockTechnicalDefinitions = ($settings['lock_technical_definitions'] ?? true) ? 'yes' : 'no';
 
+        // Enrichment is permitted only when the instructor allows illustrative material
+        // (analogies or example substitution). It lets advanced learners receive a worked
+        // scenario and novices receive concrete scaffolding — always illustrating existing
+        // concepts, never adding new facts.
+        $enrichmentEnabled = $allowAnalogiesBool || $allowExampleSubstitutionBool;
+
         $depthInstruction = match ($knowledgeLevel) {
-            'advanced' => 'Emphasize connections between ideas already in the original. Compress repetition. Do not add new material.',
-            'novice' => 'Add scaffolding using only original wording: short numbered steps, inline clarifications of terms already defined in the original.',
+            'advanced' => $enrichmentEnabled
+                ? 'Write denser, more sophisticated prose. Surface the relationships between ideas already in the original, then anchor the core concept with ONE concise worked scenario or analogy that illustrates it (no new facts). Compress obvious repetition.'
+                : 'Emphasize connections between ideas already in the original. Compress repetition. Do not add new material.',
+            'novice' => $enrichmentEnabled
+                ? 'Maximize scaffolding: break the explanation into short numbered micro-steps, add inline clarifications of terms already defined in the original, and ground the idea with ONE simple everyday analogy that illustrates it (no new facts).'
+                : 'Add scaffolding using only original wording: short numbered steps, inline clarifications of terms already defined in the original.',
             default => 'Balance clarity and brevity using only the original material.',
         };
 
@@ -238,7 +256,13 @@ TXT;
             default => 'Clean prose; preserve paragraph flow from the original.',
         };
 
-        $wordBudget = (int) min(400, max(80, (int) (str_word_count(strip_tags($originalText)) * 1.25)));
+        // Enrichment (a worked scenario / analogy) needs headroom. Give advanced and novice
+        // enrichment paths up to ~200% of the original; keep the balanced path tight at ~125%.
+        $originalWords = str_word_count(strip_tags($originalText));
+        $enrichmentForLevel = $enrichmentEnabled && in_array($knowledgeLevel, ['advanced', 'novice'], true);
+        $budgetMultiplier = $enrichmentForLevel ? 2.0 : 1.25;
+        $budgetCeiling = $enrichmentForLevel ? 650 : 400;
+        $wordBudget = (int) min($budgetCeiling, max(80, (int) ($originalWords * $budgetMultiplier)));
 
         // Build optional lesson context block
         $lessonContextBlock = '';
@@ -264,6 +288,25 @@ LESSON CONTEXT (for continuity — do not repeat what was already established):
 - Terms already introduced in prior chunks: {$priorTerms}
 - Continuity instruction: Do NOT re-scaffold or re-define any term from the list above.{$roleNote}
 CTX;
+        }
+
+        // Build the enrichment directive block. This is the "ENRICHMENT block" the system
+        // prompt refers to — it tells the rewriter whether it may add an illustrative
+        // scenario/analogy for this learner, and is gated by instructor permissions + level.
+        if ($enrichmentForLevel) {
+            $enrichmentBlock = <<<'EN'
+
+ENRICHMENT: ENABLED for this learner.
+- You MAY add ONE short illustrative scenario or analogy that makes an EXISTING concept easier to grasp.
+- The scenario/analogy introduces NO new facts, figures, definitions, or topics — it only illustrates what the original already teaches.
+- Keep all preserved facts and technical terms intact. The added illustration is clearly supportive, not a new section of content.
+EN;
+        } else {
+            $enrichmentBlock = <<<'EN'
+
+ENRICHMENT: DISABLED.
+- Do not add scenarios or analogies. Rephrase, reorder, and adjust depth using the original material only.
+EN;
         }
 
         // Build optional presentation mode block
@@ -331,14 +374,14 @@ DEPTH GUIDANCE:
 
 INSTRUCTOR PERMISSIONS:
 - Simplification: {$allowSimplification}
-- Example substitution (existing examples only): {$allowExampleSubstitution}
-- Analogies (from original concepts only): {$allowAnalogies}
+- Example substitution: {$allowExampleSubstitution}
+- Analogies (illustrating original concepts only): {$allowAnalogies}
 - Lock technical definitions word-for-word: {$lockTechnicalDefinitions}
 - Adaptation depth: {$minDifficulty}–{$maxDifficulty} (1=minimal rephrase, 5=full delivery rewrite; never add facts)
-{$lessonContextBlock}{$presentationModeBlock}
+{$enrichmentBlock}{$lessonContextBlock}{$presentationModeBlock}
 TASK:
-Produce a student delivery copy. Same learning objective. Same facts. Different phrasing/structure only.
-Target length: about {$wordBudget} words (never exceed 150% of original word count).
+Produce a student delivery copy. Same learning objective. Same facts. Phrasing, structure, scaffolding, and permitted illustrative framing may change.
+Target length: about {$wordBudget} words.
 TXT;
     }
 }

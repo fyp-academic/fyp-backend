@@ -246,6 +246,12 @@ class AdaptiveContentController extends Controller
                 'preferred_modality' => $contentProfile['preferred_modality'] ?? 'text',
                 'completion_rate' => $contentProfile['completion_rate'] ?? 0,
                 'knowledge_level' => $contentProfile['knowledge_level'] ?? 'intermediate',
+                // Include the signals that drive enrichment/mode so a profile change
+                // re-triggers adaptation instead of serving a stale cached payload.
+                'primary_profile' => $contentProfile['primary_profile'] ?? null,
+                'vark_style' => $contentProfile['vark_style'] ?? null,
+                'at_risk' => $contentProfile['at_risk'] ?? false,
+                'risk_tier' => $contentProfile['risk_tier'] ?? null,
             ]))),
         ]);
 

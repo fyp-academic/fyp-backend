@@ -8,7 +8,10 @@ namespace App\Services;
  */
 class AdaptationIntegrityService
 {
-    private const MIN_CHANGE_SIMILARITY = 92.0;
+    // Only near-verbatim output (>= this %) is treated as "no meaningful change" and
+    // falls through to presentation_only. Genuine rephrasing/enrichment sits below this
+    // and is accepted as adapted, so per-profile delivery differences are not discarded.
+    private const MIN_CHANGE_SIMILARITY = 98.0;
 
     private const MIN_LENGTH_RATIO = 0.45;
 

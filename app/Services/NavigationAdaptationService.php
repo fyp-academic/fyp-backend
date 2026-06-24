@@ -48,8 +48,10 @@ class NavigationAdaptationService
         $allowNonLinear = $openNavigation || $navigationPattern === 'random';
 
         $activities = $this->orderedActivities($courseId);
+        // Every row in user_activity_completions IS a completion (there is no
+        // boolean `completed` column — only completion_type/completed_at).
         $completedIds = UserActivityCompletion::where('user_id', $studentId)
-            ->where('completed', true)
+            ->where('course_id', $courseId)
             ->pluck('activity_id')
             ->flip()
             ->all();
