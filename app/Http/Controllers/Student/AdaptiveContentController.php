@@ -32,6 +32,13 @@ use Illuminate\Support\Str;
 
 class AdaptiveContentController extends Controller
 {
+    /**
+     * Version token mixed into every adapted-payload cache key. BUMP THIS whenever the
+     * delivery prompts or adaptation logic in GeminiAdaptationService change, so previously
+     * cached adaptations are treated as misses and regenerated instead of replayed for 24h.
+     */
+    private const ADAPTATION_CACHE_VERSION = 'v2-narrative-hook';
+
     public function __construct(
         private GeminiAdaptationService $geminiService,
         private StudentProfileService $profileService,
@@ -320,7 +327,9 @@ class AdaptiveContentController extends Controller
         }
 
         // Build cache key
-        $cacheKey = "adapt:{$student->id}:{$chunkId}:{$profileHash}";
+        // Version suffix (kept last so the "adapt:{studentId}:*" invalidation glob still
+        // matches) ensures a prompt/logic deploy supersedes pre-deploy cached payloads.
+        $cacheKey = "adapt:{$student->id}:{$chunkId}:{$profileHash}:" . self::ADAPTATION_CACHE_VERSION;
 
         // Check file cache for previously adapted payload
         $cachedPayload = $this->fileCacheGet($cacheKey);
@@ -708,7 +717,7 @@ class AdaptiveContentController extends Controller
             $contentProfile['preferred_modality'] ?? '',
             $contentProfile['weak_topics'] ?? [],
         ]));
-        $cacheKey = "video-support:{$activityId}:{$student->id}:{$profileHash}";
+        $cacheKey = "video-support:{$activityId}:{$student->id}:{$profileHash}:" . self::ADAPTATION_CACHE_VERSION;
 
         // Return cached response when available
         $cached = $this->fileCacheGet($cacheKey);
