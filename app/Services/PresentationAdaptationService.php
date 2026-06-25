@@ -18,6 +18,27 @@ class PresentationAdaptationService
     private const VALID_MODES = ['guided_steps', 'visual_discovery', 'deep_focus', 'narrative_example', 'standard'];
 
     /**
+     * Map an explicit student style choice (declared modality and/or VARK) to a presentation
+     * mode. Presentation-only: this picks WHICH player/layout the learner sees, never content
+     * adaptation depth. Mirrors the modality mapping in StudentProfileService and
+     * deriveModeFallback. Returns null when the style yields no specific preference.
+     */
+    public static function modeForStyle(?string $modality, ?string $vark = null): ?string
+    {
+        if ($modality === 'visual' || $vark === 'visual') {
+            return 'visual_discovery';
+        }
+        if ($modality === 'example-based' || $vark === 'kinesthetic') {
+            return 'narrative_example';
+        }
+        if ($modality === 'text' || in_array($vark, ['reading', 'read_write', 'auditory'], true)) {
+            return 'deep_focus';
+        }
+
+        return null;
+    }
+
+    /**
      * Ask Gemini to select the optimal presentation mode for this learner.
      * Falls back to rule-based derivation on any failure.
      *
@@ -25,7 +46,15 @@ class PresentationAdaptationService
      */
     public function selectMode(array $contentProfile, string $contentType = 'lecture'): string
     {
-        // Instructor override always wins — no AI call needed.
+        // Explicit student style choice wins — a learner controls how content is PRESENTED.
+        // Sits above the instructor pin so "change my learning style" always takes effect
+        // (content adaptation depth and navigation are unaffected and decided elsewhere).
+        $studentMode = $contentProfile['preferred_presentation_mode'] ?? null;
+        if (is_string($studentMode) && in_array($studentMode, self::VALID_MODES, true)) {
+            return $studentMode;
+        }
+
+        // Instructor override is the default when the student has made no explicit choice.
         $studentId = (string) ($contentProfile['student_id'] ?? '');
         $courseId  = (string) ($contentProfile['course_id'] ?? '');
         if ($studentId !== '' && $courseId !== '') {

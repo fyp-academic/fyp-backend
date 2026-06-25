@@ -7,12 +7,18 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use App\Models\StudentProfile;
 use App\Models\UserPreference;
 use App\Services\BadgeService;
+use App\Services\PresentationAdaptationService;
+use App\Services\StudentProfileService;
 
 class ProfileController extends Controller
 {
-    public function __construct(private BadgeService $badges) {}
+    public function __construct(
+        private BadgeService $badges,
+        private StudentProfileService $profileService,
+    ) {}
 
     /**
      * GET /api/v1/profile
@@ -289,8 +295,29 @@ class ProfileController extends Controller
         ]));
         $user->save();
 
-        // Refresh StudentProfile so preferred_modality reflects the new declaration immediately
-        \App\Jobs\RecalculateProfileJob::dispatch($user->id)->delay(now()->addSeconds(2));
+        // Refresh the behavioral profile synchronously so the change takes effect immediately
+        // (an async job would leave "nothing happens" until a queue worker runs).
+        $this->profileService->recalculate($user->id);
+
+        // Persist the explicit presentation choice. Learning style is presentation-only: it
+        // selects which player/layout the learner sees and overrides the instructor pin in
+        // selectMode(); it never alters content adaptation depth or navigation.
+        $modes = (array) ($user->preferred_modes ?? []);
+        $declaredModality = null;
+        if (in_array('video', $modes, true) || in_array('multimedia', $modes, true)) {
+            $declaredModality = 'visual';
+        } elseif (in_array('classroom', $modes, true) || in_array('live', $modes, true)) {
+            $declaredModality = 'example-based';
+        }
+        $mode = PresentationAdaptationService::modeForStyle($declaredModality, $user->vark_style);
+        if ($mode !== null) {
+            $profile = StudentProfile::firstOrNew(['student_id' => $user->id]);
+            if (! $profile->exists) {
+                $profile->id = Str::uuid()->toString();
+            }
+            $profile->preferred_presentation_mode = $mode;
+            $profile->save();
+        }
 
         return response()->json([
             'message' => 'Learning style saved.',

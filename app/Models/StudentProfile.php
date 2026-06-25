@@ -17,7 +17,7 @@ class StudentProfile extends Model
 
     protected $fillable = [
         'id', 'student_id', 'pace', 'quiz_average', 'weak_topics',
-        'preferred_modality', 'completion_rate', 'profile_hash',
+        'preferred_modality', 'preferred_presentation_mode', 'completion_rate', 'profile_hash',
     ];
 
     protected function casts(): array

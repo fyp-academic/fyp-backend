@@ -580,6 +580,9 @@ class AdaptiveContentController extends Controller
                 ['student_id' => $studentId],
                 [
                     'preferred_modality' => $manualModality,
+                    // Learning style is presentation-only: persist the player/layout the
+                    // learner chose so selectMode() honors it above the instructor pin.
+                    'preferred_presentation_mode' => PresentationAdaptationService::modeForStyle($manualModality, null),
                     'profile_hash' => $profile['profile_hash'],
                     'updated_at' => now(),
                 ]

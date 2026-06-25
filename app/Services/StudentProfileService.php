@@ -52,7 +52,7 @@ class StudentProfileService
             ->whereNotNull('score')
             ->whereNotNull('max_score')
             ->where('max_score', '>', 0)
-            ->selectRaw('AVG((score / max_score) * 100) as avg_score')
+            ->selectRaw('AVG((score * 1.0 / max_score) * 100) as avg_score')
             ->value('avg_score');
 
         return (float) ($avg ?? 0);
@@ -103,7 +103,7 @@ class StudentProfileService
             ->where('quiz_attempts.student_id', $studentId)
             ->whereNotNull('quiz_attempts.score')
             ->whereNotNull('quiz_attempts.max_score')
-            ->whereRaw('(quiz_attempts.score / quiz_attempts.max_score) * 100 < 60')
+            ->whereRaw('(quiz_attempts.score * 1.0 / quiz_attempts.max_score) * 100 < 60')
             ->select('sections.title as topic_name')
             ->distinct()
             ->pluck('topic_name')

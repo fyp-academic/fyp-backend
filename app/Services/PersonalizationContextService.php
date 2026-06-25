@@ -192,6 +192,7 @@ class PersonalizationContextService
             'quiz_average' => $quizAverage,
             'weak_topics' => $weakTopics,
             'preferred_modality' => $modality,
+            'preferred_presentation_mode' => $studentProfile?->preferred_presentation_mode,
             'completion_rate' => $completionRate,
             'knowledge_level' => $knowledgeLevel,
             'primary_profile' => $primaryProfile,
@@ -230,7 +231,7 @@ class PersonalizationContextService
             ->whereNotNull('quiz_attempts.score')
             ->whereNotNull('quiz_attempts.max_score')
             ->where('quiz_attempts.max_score', '>', 0)
-            ->selectRaw('AVG((quiz_attempts.score / quiz_attempts.max_score) * 100) as avg_score')
+            ->selectRaw('AVG((quiz_attempts.score * 1.0 / quiz_attempts.max_score) * 100) as avg_score')
             ->value('avg_score');
 
         $pace = 'medium';
@@ -356,7 +357,7 @@ class PersonalizationContextService
             ->where('sections.course_id', $courseId)
             ->whereNotNull('quiz_attempts.score')
             ->whereNotNull('quiz_attempts.max_score')
-            ->whereRaw('(quiz_attempts.score / quiz_attempts.max_score) * 100 < 60')
+            ->whereRaw('(quiz_attempts.score * 1.0 / quiz_attempts.max_score) * 100 < 60')
             ->select('sections.title as topic_name')
             ->distinct()
             ->pluck('topic_name')
