@@ -165,8 +165,9 @@ class GeminiAdaptationService
     {
         $wordCount = str_word_count(strip_tags($originalText));
         $maxDifficulty = (int) ($settings['max_difficulty'] ?? 5);
-        // Headroom for enrichment (worked scenario / analogy ~2x original) plus markdown overhead.
-        $scaled = (int) min(1400, max(200, $wordCount * (3 + ($maxDifficulty * 0.4))));
+        // Headroom for enrichment (advanced high-performers get up to two scenarios plus
+        // Socratic prompts ~2.4x original) plus markdown overhead.
+        $scaled = (int) min(1600, max(200, $wordCount * (3 + ($maxDifficulty * 0.4))));
 
         return $scaled;
     }
@@ -199,8 +200,10 @@ STRICT RULES:
 6. Output markdown body only — no preamble, labels, or meta commentary.
 7. For "visual" delivery: reorganize existing sentences into markdown tables or bullet lists — do not invent diagram content.
 8. For "example-based" delivery: lead with an example. Prefer one already in the original; if none exists and enrichment is permitted, you may add a short illustrative scenario that demonstrates the existing concept without adding new facts.
-9. "Advanced depth" means surface relationships between concepts already stated, and — when enrichment is permitted — anchor them with one concise worked scenario or analogy. Never introduce new concepts.
+9. "Advanced depth" means surface relationships between concepts already stated, and — when enrichment is permitted — anchor them with one or more concise worked scenarios or analogies. Never introduce new concepts.
 10. Never repeat scaffolding, context, or term definitions already established in earlier chunks of the same lesson. The LESSON CONTEXT block (when present) tells you what came before — honour it.
+11. NARRATIVE OPENING (when the PRESENTATION MODE block requests it): you may open with a brief, relatable hook — a question or mini-scenario ("Have you ever…", "Imagine…", "Picture…") that frames the concept's real-world context before it is explained. The hook is framing only: it asserts no new fact, figure, or definition, and simply sets up material already in the original.
+12. SOCRATIC QUESTIONS (when the PRESENTATION MODE / DEPTH block requests it for an advanced learner): you may pose short reflective "why / what-if" questions about a concept just presented, each followed by a one-to-two sentence reasoning walkthrough. These are thinking prompts woven into the prose — they are NOT graded, must never resemble, reveal, or pre-empt a quiz/assessment question, and must reason only over facts already in the original.
 TXT;
     }
 
@@ -236,7 +239,7 @@ TXT;
 
         $depthInstruction = match ($knowledgeLevel) {
             'advanced' => $enrichmentEnabled
-                ? 'Write denser, more sophisticated prose. Surface the relationships between ideas already in the original, then anchor the core concept with ONE concise worked scenario or analogy that illustrates it (no new facts). Compress obvious repetition.'
+                ? 'Write denser, more sophisticated prose. Surface the relationships between ideas already in the original, then anchor the core concept with UP TO TWO concise worked scenarios or analogies that illustrate it (no new facts). Where it deepens reasoning, pose one or two short Socratic "why / what-if" questions about a concept just covered, each followed by a one-to-two sentence reasoning walkthrough (thinking prompts only — never graded, never resembling a quiz question). Compress obvious repetition.'
                 : 'Emphasize connections between ideas already in the original. Compress repetition. Do not add new material.',
             'novice' => $enrichmentEnabled
                 ? 'Maximize scaffolding: break the explanation into short numbered micro-steps, add inline clarifications of terms already defined in the original, and ground the idea with ONE simple everyday analogy that illustrates it (no new facts).'
@@ -256,12 +259,27 @@ TXT;
             default => 'Clean prose; preserve paragraph flow from the original.',
         };
 
-        // Enrichment (a worked scenario / analogy) needs headroom. Give advanced and novice
-        // enrichment paths up to ~200% of the original; keep the balanced path tight at ~125%.
+        // A narrative opening hook is permitted whenever the instructor allows illustrative
+        // material — it is framing, not a level-gated enrichment, so even intermediate
+        // narrative learners receive it.
+        $narrativeHookAllowed = $enrichmentEnabled;
+
+        // Enrichment (worked scenarios / analogies) needs headroom. Advanced high-performers
+        // additionally receive Socratic prompts and a second scenario, so give that path the
+        // most room (~240%, ceiling 800); other enrichment paths ~200%; balanced path ~125%.
         $originalWords = str_word_count(strip_tags($originalText));
         $enrichmentForLevel = $enrichmentEnabled && in_array($knowledgeLevel, ['advanced', 'novice'], true);
-        $budgetMultiplier = $enrichmentForLevel ? 2.0 : 1.25;
-        $budgetCeiling = $enrichmentForLevel ? 650 : 400;
+        $advancedEnriched = $enrichmentEnabled && $knowledgeLevel === 'advanced';
+        if ($advancedEnriched) {
+            $budgetMultiplier = 2.4;
+            $budgetCeiling = 800;
+        } elseif ($enrichmentForLevel) {
+            $budgetMultiplier = 2.0;
+            $budgetCeiling = 650;
+        } else {
+            $budgetMultiplier = 1.25;
+            $budgetCeiling = 400;
+        }
         $wordBudget = (int) min($budgetCeiling, max(80, (int) ($originalWords * $budgetMultiplier)));
 
         // Build optional lesson context block
@@ -312,6 +330,19 @@ EN;
         // Build optional presentation mode block
         $presentationModeBlock = '';
         $presentationMode = (string) ($lessonContext['presentation_mode'] ?? '');
+
+        // Advanced high-performers in deep_focus get Socratic reflective questions; other
+        // learners do not, so the prompt stays focused on dense connective prose for them.
+        $deepFocusSocratic = $advancedEnriched
+            ? "\n- Where it sharpens reasoning, pose one or two short Socratic \"why / what-if\" questions about a concept just covered, each followed by a one-to-two sentence reasoning walkthrough. These are thinking prompts only — never graded, never resembling a quiz question."
+            : '';
+
+        // Narrative delivery opens with a relatable hook when the instructor permits
+        // illustrative framing; otherwise it falls back to leading with an existing example.
+        $narrativeOpening = $narrativeHookAllowed
+            ? "- Open with a brief relatable hook (1–2 sentences) that frames the concept's real-world context — a question or mini-scenario (\"Have you ever…\", \"Imagine…\", \"Picture…\"). The hook adds no new facts; it sets up the concept already in the original.\n- Then place a --- markdown separator, followed by the concept/theory.\n- If the original already contains a worked example, fold it in after the hook (hook → example/theory) rather than discarding it."
+            : "- If an example or scenario exists in the original, lead with it before the theoretical explanation.\n- Use a --- markdown separator between the example/scenario and the theory section.";
+
         if ($presentationMode !== '') {
             $presentationModeBlock = match ($presentationMode) {
                 'guided_steps' => <<<'PM'
@@ -332,21 +363,20 @@ PRESENTATION MODE: visual_discovery
 - Use bullet lists for enumerations of 3 or more items.
 - Apply Mayer's Signaling: use headings as visual anchors directing learner attention.
 PM,
-                'deep_focus' => <<<'PM'
+                'deep_focus' => <<<PM
 
 PRESENTATION MODE: deep_focus
 - Write in dense academic prose; avoid unnecessary step numbering or bullet lists.
 - Surface logical connections between ideas stated in the original using connective language (therefore, consequently, which implies, etc.).
 - Compress any redundant phrasing from the original.
-- Apply Mayer's Signaling only for the single most critical concept (bold once).
+- Apply Mayer's Signaling only for the single most critical concept (bold once).{$deepFocusSocratic}
 PM,
-                'narrative_example' => <<<'PM'
+                'narrative_example' => <<<PM
 
 PRESENTATION MODE: narrative_example
-- If an example or scenario exists in the original, lead with it before the theoretical explanation.
-- Use a --- markdown separator between the example/scenario and the theory section.
+{$narrativeOpening}
 - Write in a conversational explanatory tone.
-- Ensure the theory section explicitly refers back to the opening example.
+- Ensure the theory section explicitly refers back to the opening hook/example.
 PM,
                 default => '',
             };

@@ -52,8 +52,11 @@ class AdaptationIntegrityService
             $similarity
         );
 
+        // The advanced high-performer path adds extra scenarios + Socratic prompts, so the
+        // caller may raise the ceiling for that adaptation only; everyone else keeps 2.2x.
+        $maxLengthRatio = (float) ($settings['max_length_ratio'] ?? self::MAX_LENGTH_RATIO);
         $lengthRatio = strlen($cleaned) / max(strlen($original), 1);
-        $lengthOk = $lengthRatio >= self::MIN_LENGTH_RATIO && $lengthRatio <= self::MAX_LENGTH_RATIO;
+        $lengthOk = $lengthRatio >= self::MIN_LENGTH_RATIO && $lengthRatio <= $maxLengthRatio;
 
         $preventRewrite = (bool) ($settings['prevent_assessment_rewrite'] ?? true);
         if ($preventRewrite && $this->looksLikeAssessment($original)) {

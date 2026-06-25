@@ -383,7 +383,17 @@ class AdaptiveContentController extends Controller
             ));
         }
 
-        $assessment = $this->integrityService->assess($chunk->chunk_text, $rawAdapted, $settingsArray);
+        // Advanced high-performers receive extra scenarios + Socratic prompts, which run
+        // longer than the default 2.2x cap. Relax the length ceiling for that path only so
+        // the richer delivery is accepted rather than rejected back to the original.
+        $enrichmentAllowed = ($settingsArray['allow_analogies'] ?? true) || ($settingsArray['allow_example_substitution'] ?? true);
+        $advancedEnriched = ($profileArray['knowledge_level'] ?? 'intermediate') === 'advanced' && $enrichmentAllowed;
+        $assessSettings = $settingsArray;
+        if ($advancedEnriched) {
+            $assessSettings['max_length_ratio'] = 2.8;
+        }
+
+        $assessment = $this->integrityService->assess($chunk->chunk_text, $rawAdapted, $assessSettings);
         $displayText = $assessment['adapted_text'];
         $contentAdapted = $assessment['content_adapted'];
         $deliveryStatus = $assessment['delivery_status'];
