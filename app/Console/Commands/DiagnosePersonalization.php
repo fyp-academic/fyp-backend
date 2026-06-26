@@ -14,6 +14,7 @@ use App\Services\PersonalizationContextService;
 use App\Services\PresentationAdaptationService;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 
 /**
  * Runs the REAL content-adaptation pipeline for one student on one course and reports, at each
@@ -58,6 +59,18 @@ class DiagnosePersonalization extends Command
         $this->line('Adapt cooldown (recent 429): '.($gemini->isCoolingDown() ? 'ACTIVE — quota/rate-limited' : 'off'));
         $this->line('Deployed cache version: '.$this->cacheVersion().'  (expected: v4-shared)');
         $this->line('AdaptationLog rows (all-time successes): '.AdaptationLog::count());
+
+        // ── Gemini connectivity probe ──────────────────────────────────────
+        // Two minimal raw calls reveal the EXACT API status/body that adapt() swallows. Running
+        // both (without/with thinkingConfig) isolates a key/project failure from a thinkingConfig
+        // incompatibility.
+        $this->line('');
+        $this->info('── Gemini connectivity probe ──');
+        $p1 = $this->probeGemini($key, false);
+        $this->line('probe (no thinkingConfig): HTTP '.$p1['status'].'  '.$p1['body']);
+        $p2 = $this->probeGemini($key, true);
+        $this->line('probe (thinkingBudget=0) : HTTP '.$p2['status'].'  '.$p2['body']);
+        $this->line('VERDICT: '.$this->interpretProbe($p1, $p2));
 
         // ── Profile ────────────────────────────────────────────────────────
         $profile = $context->contentProfileForAdaptation($user->id, $course->id);
@@ -122,6 +135,75 @@ class DiagnosePersonalization extends Command
         }
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Minimal raw generateContent call. Returns the real HTTP status + a body snippet so the
+     * exact Google error is visible (adapt() swallows it and returns null).
+     *
+     * @return array{status: int|string, body: string}
+     */
+    private function probeGemini(string $key, bool $withThinking): array
+    {
+        if ($key === '') {
+            return ['status' => 'n/a', 'body' => 'GEMINI_API_KEY not set'];
+        }
+
+        $model = (string) (config('services.gemini.model') ?? 'gemini-2.5-flash');
+        $baseUrl = rtrim((string) (config('services.gemini.base_url') ?? 'https://generativelanguage.googleapis.com/v1beta'), '/');
+        $url = "{$baseUrl}/models/{$model}:generateContent?key={$key}";
+
+        $generationConfig = ['maxOutputTokens' => 1];
+        if ($withThinking) {
+            $generationConfig['thinkingConfig'] = ['thinkingBudget' => 0];
+        }
+
+        try {
+            $resp = Http::timeout(20)->withHeaders(['Content-Type' => 'application/json'])->post($url, [
+                'contents' => [['role' => 'user', 'parts' => [['text' => 'ping']]]],
+                'generationConfig' => $generationConfig,
+            ]);
+
+            return [
+                'status' => $resp->status(),
+                'body' => mb_substr(preg_replace('/\s+/', ' ', $resp->body()) ?? '', 0, 400),
+            ];
+        } catch (\Throwable $e) {
+            return ['status' => 'EXC', 'body' => get_class($e).': '.$e->getMessage()];
+        }
+    }
+
+    /**
+     * @param  array{status: int|string, body: string}  $p1
+     * @param  array{status: int|string, body: string}  $p2
+     */
+    private function interpretProbe(array $p1, array $p2): string
+    {
+        $s1 = $p1['status'];
+        $s2 = $p2['status'];
+
+        if ($s1 === 200 && $s2 === 200) {
+            return 'Gemini key/project OK. If chunks still fail, investigate payload size or transient errors.';
+        }
+        if ($s1 === 200 && $s2 !== 200) {
+            return "thinkingConfig is rejected in this environment (probe #2 failed) — model/endpoint does not support thinkingBudget. Remove it or change model.";
+        }
+
+        $blob = strtolower($p1['body'].' '.$p2['body']);
+        if (str_contains($blob, 'api_key_invalid') || str_contains($blob, 'api key not valid')) {
+            return 'GEMINI_API_KEY is invalid/expired in prod .env — replace it.';
+        }
+        if (str_contains($blob, 'permission_denied') || str_contains($blob, 'has not been used') || str_contains($blob, 'is disabled') || str_contains($blob, 'service_disabled')) {
+            return 'Generative Language API is not enabled for this key\'s Google Cloud project, OR the key has referrer/IP restrictions blocking this server. Enable the API / remove key restrictions.';
+        }
+        if (str_contains($blob, 'not found') || $s1 === 404 || $s2 === 404) {
+            return 'Model not found — fix GEMINI_MODEL in prod .env (current: '.(string) config('services.gemini.model').').';
+        }
+        if ($s1 === 429 || $s2 === 429) {
+            return 'Quota/rate limit (429) — wait for reset or enable billing.';
+        }
+
+        return 'Unexpected Gemini error — see the status/body above.';
     }
 
     private function cacheVersion(): string
