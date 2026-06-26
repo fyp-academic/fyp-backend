@@ -368,6 +368,12 @@ class AdaptiveContentController extends Controller
             'lock_definitions'   => (bool) ($settingsArray['lock_technical_definitions'] ?? true),
             'max_difficulty'     => (int) ($settingsArray['max_difficulty'] ?? 5),
             'content_hash'       => $contentHash,
+            // Provider + model are part of the signature so switching LLMs (or models)
+            // regenerates rather than serving a copy made by a different engine.
+            'provider'           => (string) (config('services.adaptation.provider') ?? 'gemini'),
+            'model'              => (config('services.adaptation.provider') === 'claude')
+                ? (string) config('services.anthropic.model')
+                : (string) config('services.gemini.model'),
         ]));
 
         // Shared cache key (no student id). Version suffix supersedes pre-deploy payloads.
