@@ -500,8 +500,9 @@ EN;
 
 PRESENTATION MODE: guided_steps
 - Structure the output as numbered steps where logically appropriate.
-- Bold key technical terms on first mention: **term**.
-- Mark the single most important concept per step with ==highlight== syntax.
+- Bold every key technical term on first mention with double asterisks, exactly like **DNS lookup**.
+- In EVERY step, wrap the single most important phrase in DOUBLE EQUALS signs, exactly like ==this phrase==. The literal == characters are mandatory — the LMS converts ==...== into a yellow highlighter, so a step without ==...== shows no highlight. Use ==...== at least once per step and never omit it.
+- Output the ** and == markers as literal plain-text characters; do NOT convert them to HTML tags or drop them.
 - Use one idea per sentence; add short transitional phrases between steps.
 - Apply Mayer's Signaling: begin each major step with a directional cue (e.g. "First, ...", "Next, ...", "Finally, ...").
 PM,
