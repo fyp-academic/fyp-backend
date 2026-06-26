@@ -1,5 +1,12 @@
 <?php
 
+// Normalize the Gemini base URL: trim surrounding whitespace/slashes and strip a stray trailing
+// "/models" so a misconfigured GEMINI_BASE_URL (e.g. ".../v1beta/models") can't double up into
+// ".../models/models/..." → 404. Every Gemini caller reads config('services.gemini.base_url'),
+// so sanitizing here fixes them all centrally.
+$geminiBaseUrl = rtrim((string) env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'), " \t/");
+$geminiBaseUrl = preg_replace('#/models/?$#i', '', $geminiBaseUrl) ?: 'https://generativelanguage.googleapis.com/v1beta';
+
 return [
 
     /*
@@ -72,7 +79,7 @@ return [
     'gemini' => [
         'api_key' => env('GEMINI_API_KEY', ''),
         'model' => env('GEMINI_MODEL', 'gemini-2.5-flash'),
-        'base_url' => env('GEMINI_BASE_URL', 'https://generativelanguage.googleapis.com/v1beta'),
+        'base_url' => $geminiBaseUrl,
         'summary_model' => env('GEMINI_SUMMARY_MODEL', 'gemini-2.5-flash'),
     ],
 
