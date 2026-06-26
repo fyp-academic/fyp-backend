@@ -56,5 +56,10 @@ jobs:
             php artisan route:cache
             php artisan view:cache
             php artisan event:cache
+            # Drop stale application/adaptation cache (and any 429 cooldown flag)
+            php artisan cache:clear
+            # Reload PHP-FPM so OPcache loads the freshly-rsynced code instead of serving the
+            # old compiled bytecode (without this, new code sits on disk unused after a deploy).
+            systemctl reload php8.2-fpm || sudo systemctl reload php8.2-fpm || true
             rm -rf /tmp/fyp-backend-deploy
             echo "Deployment finished at $(date)"
