@@ -84,6 +84,20 @@ return [
     ],
 
     /*
+    | Content-adaptation provider. ADAPTATION_PROVIDER=claude routes the delivery rewrite to
+    | the Anthropic API (set ANTHROPIC_API_KEY); anything else keeps the default Gemini path.
+    */
+    'adaptation' => [
+        'provider' => env('ADAPTATION_PROVIDER', 'gemini'),
+    ],
+
+    'anthropic' => [
+        'api_key' => env('ANTHROPIC_API_KEY', ''),
+        'model' => env('ANTHROPIC_MODEL', 'claude-haiku-4-5'),
+        'base_url' => rtrim((string) env('ANTHROPIC_BASE_URL', 'https://api.anthropic.com/v1'), '/'),
+    ],
+
+    /*
     |--------------------------------------------------------------------------
     | YouTube Data API v3 (for AI Tutor resource discovery)
     |--------------------------------------------------------------------------

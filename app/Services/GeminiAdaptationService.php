@@ -14,6 +14,15 @@ class GeminiAdaptationService
 
     private string $baseUrl;
 
+    /** 'gemini' (default) or 'claude'. Selects which LLM does the delivery rewrite. */
+    private string $provider;
+
+    private string $anthropicKey;
+
+    private string $anthropicModel;
+
+    private string $anthropicBaseUrl;
+
     private const MAX_RETRIES = 3;
 
     private const RETRY_DELAY_MS = 500;
@@ -40,6 +49,11 @@ class GeminiAdaptationService
         $this->apiKey = (string) (config('services.gemini.api_key') ?? '');
         $this->model = (string) (config('services.gemini.model') ?? 'gemini-2.5-flash');
         $this->baseUrl = rtrim((string) (config('services.gemini.base_url') ?? 'https://generativelanguage.googleapis.com/v1beta'), '/');
+
+        $this->provider = (string) (config('services.adaptation.provider') ?? 'gemini');
+        $this->anthropicKey = (string) (config('services.anthropic.api_key') ?? '');
+        $this->anthropicModel = (string) (config('services.anthropic.model') ?? 'claude-haiku-4-5');
+        $this->anthropicBaseUrl = rtrim((string) (config('services.anthropic.base_url') ?? 'https://api.anthropic.com/v1'), '/');
     }
 
     /**
@@ -55,20 +69,35 @@ class GeminiAdaptationService
         array $lessonContext = [],
     ): ?string
     {
-        if (empty($this->apiKey)) {
-            Log::error('GeminiAdaptationService: Missing Gemini API key');
-
-            return null;
-        }
-
         if (trim($originalText) === '') {
             return null;
         }
 
+        $apiKey = $this->provider === 'claude' ? $this->anthropicKey : $this->apiKey;
+        if (empty($apiKey)) {
+            Log::error('Adaptation: missing API key', ['provider' => $this->provider]);
+
+            return null;
+        }
+
+        // Prompt building is provider-agnostic — only the HTTP transport below differs.
         $systemPrompt = $this->systemPrompt();
         $userPrompt = $this->buildUserPrompt($originalText, $studentProfile, $instructorSettings, $lessonContext);
         $maxTokens = $this->resolveMaxTokens($originalText, $instructorSettings);
+        $originalLength = strlen($originalText);
 
+        return $this->provider === 'claude'
+            ? $this->callClaude($systemPrompt, $userPrompt, $maxTokens, $originalLength, $studentProfile)
+            : $this->callGemini($systemPrompt, $userPrompt, $maxTokens, $originalLength, $studentProfile);
+    }
+
+    /**
+     * Google Gemini transport (generateContent) with retry/backoff. Returns rewritten markdown or null.
+     *
+     * @param  array<string, mixed>  $studentProfile
+     */
+    private function callGemini(string $systemPrompt, string $userPrompt, int $maxTokens, int $originalLength, array $studentProfile): ?string
+    {
         $payload = [
             'contents' => [
                 [
@@ -108,7 +137,7 @@ class GeminiAdaptationService
                             'attempt' => $attempt,
                             'profile_knowledge_level' => $studentProfile['knowledge_level'] ?? 'unknown',
                             'profile_pace' => $studentProfile['pace'] ?? 'unknown',
-                            'text_length' => strlen($originalText),
+                            'text_length' => $originalLength,
                             'output_length' => strlen($text),
                         ]);
 
@@ -181,12 +210,99 @@ class GeminiAdaptationService
     }
 
     /**
+     * Anthropic Claude transport (Messages API) with retry/backoff. Same prompts as Gemini —
+     * only the request/response shape differs. Returns rewritten markdown or null.
+     *
+     * @param  array<string, mixed>  $studentProfile
+     */
+    private function callClaude(string $systemPrompt, string $userPrompt, int $maxTokens, int $originalLength, array $studentProfile): ?string
+    {
+        $payload = [
+            'model' => $this->anthropicModel,
+            'max_tokens' => $maxTokens,
+            'system' => $systemPrompt,
+            'messages' => [
+                ['role' => 'user', 'content' => $userPrompt],
+            ],
+        ];
+
+        for ($attempt = 1; $attempt <= self::MAX_RETRIES; $attempt++) {
+            try {
+                $response = Http::timeout(self::TIMEOUT_SECONDS)->withHeaders([
+                    'x-api-key' => $this->anthropicKey,
+                    'anthropic-version' => '2023-06-01',
+                    'content-type' => 'application/json',
+                ])->post("{$this->anthropicBaseUrl}/messages", $payload);
+
+                if ($response->successful()) {
+                    // content is an array of blocks; concatenate the text blocks.
+                    $text = '';
+                    foreach ((array) $response->json('content', []) as $block) {
+                        if (($block['type'] ?? '') === 'text') {
+                            $text .= (string) ($block['text'] ?? '');
+                        }
+                    }
+
+                    if (trim($text) !== '') {
+                        Log::info('Claude adaptation successful', [
+                            'attempt' => $attempt,
+                            'model' => $this->anthropicModel,
+                            'profile_knowledge_level' => $studentProfile['knowledge_level'] ?? 'unknown',
+                            'text_length' => $originalLength,
+                            'output_length' => strlen($text),
+                        ]);
+
+                        return trim($text);
+                    }
+
+                    Log::warning('Claude adaptation returned empty/non-text response', [
+                        'attempt' => $attempt,
+                        'stop_reason' => $response->json('stop_reason'),
+                    ]);
+
+                    return null;
+                }
+
+                $status = $response->status();
+                $isRetryable = $this->isRetryableError($status);
+
+                if ($status === 429) {
+                    Cache::put(self::RATE_LIMIT_COOLDOWN_KEY, true, now()->addSeconds(self::RATE_LIMIT_COOLDOWN_SECONDS));
+                }
+
+                Log::warning('Claude adaptation API error', [
+                    'attempt' => $attempt,
+                    'status' => $status,
+                    'is_retryable' => $isRetryable,
+                    'body' => substr($response->body(), 0, 200),
+                ]);
+
+                if (! $isRetryable || $attempt === self::MAX_RETRIES) {
+                    return null;
+                }
+
+                usleep(self::RETRY_DELAY_MS * (2 ** ($attempt - 1)) * 1000);
+            } catch (\Throwable $e) {
+                Log::error('Claude adaptation exception', [
+                    'attempt' => $attempt,
+                    'error' => $e->getMessage(),
+                    'error_class' => get_class($e),
+                ]);
+
+                return null;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Determine if an HTTP status code represents a retryable error
      */
     private function isRetryableError(int $status): bool
     {
-        // Retryable: server errors, timeouts, rate limits
-        return in_array($status, [408, 429, 500, 502, 503, 504], true);
+        // Retryable: server errors, timeouts, rate limits, overloaded (Anthropic 529)
+        return in_array($status, [408, 429, 500, 502, 503, 504, 529], true);
     }
 
     private function resolveMaxTokens(string $originalText, array $settings): int
