@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -18,6 +19,21 @@ class GeminiAdaptationService
     private const RETRY_DELAY_MS = 500;
 
     private const TIMEOUT_SECONDS = 60;
+
+    /** When Gemini returns 429, pause adaptation calls this long to protect the shared quota. */
+    private const RATE_LIMIT_COOLDOWN_KEY = 'gemini_adapt_cooldown';
+
+    private const RATE_LIMIT_COOLDOWN_SECONDS = 60;
+
+    /**
+     * True when adaptation recently hit a Gemini rate limit. Callers should skip the rewrite and
+     * serve the instructor original instead of piling on more calls (which would keep the quota
+     * exhausted and starve the AI tutor).
+     */
+    public function isCoolingDown(): bool
+    {
+        return (bool) Cache::get(self::RATE_LIMIT_COOLDOWN_KEY, false);
+    }
 
     public function __construct()
     {
@@ -111,6 +127,12 @@ class GeminiAdaptationService
                 // Failed response - check if retryable
                 $status = $response->status();
                 $isRetryable = $this->isRetryableError($status);
+
+                // Quota exhausted — open a short cooldown so subsequent requests serve the
+                // original immediately instead of hammering Gemini and starving the AI tutor.
+                if ($status === 429) {
+                    Cache::put(self::RATE_LIMIT_COOLDOWN_KEY, true, now()->addSeconds(self::RATE_LIMIT_COOLDOWN_SECONDS));
+                }
 
                 Log::warning('Gemini adaptation API error', [
                     'attempt' => $attempt,
@@ -401,16 +423,11 @@ ORIGINAL INSTRUCTOR CONTENT (authoritative — do not alter meaning):
 {$originalText}
 """
 
-STUDENT PROFILE (delivery tuning only):
+LEARNER LEVEL SIGNATURE (delivery tuning only — this copy is shared by all learners at this
+level, so it depends only on these coarse signals, never on any individual's identity or scores):
 - Knowledge level: {$knowledgeLevel}
 - Pace: {$pace} — {$paceInstruction}
-- Quiz average: {$quizAverage}%
-- Weak topics: {$weakTopics}
 - Delivery modality: {$modality} — {$modalityInstruction}
-- Completion rate: {$completionRate}%
-- HATC profile: {$primaryProfile} | VARK: {$vark}
-- Revisit rate: {$revisitRate} | Quiz learning delta: {$learningDelta}
-- At-risk: {$atRisk}
 
 DEPTH GUIDANCE:
 {$depthInstruction}

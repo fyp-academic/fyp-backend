@@ -37,7 +37,7 @@ class AdaptiveContentController extends Controller
      * delivery prompts or adaptation logic in GeminiAdaptationService change, so previously
      * cached adaptations are treated as misses and regenerated instead of replayed for 24h.
      */
-    private const ADAPTATION_CACHE_VERSION = 'v3-content-adapt';
+    private const ADAPTATION_CACHE_VERSION = 'v4-shared';
 
     public function __construct(
         private GeminiAdaptationService $geminiService,
@@ -326,24 +326,8 @@ class AdaptiveContentController extends Controller
             ));
         }
 
-        // Build cache key
-        // Version suffix (kept last so the "adapt:{studentId}:*" invalidation glob still
-        // matches) ensures a prompt/logic deploy supersedes pre-deploy cached payloads.
-        $cacheKey = "adapt:{$student->id}:{$chunkId}:{$profileHash}:" . self::ADAPTATION_CACHE_VERSION;
-
-        // Check file cache for previously adapted payload
-        $cachedPayload = $this->fileCacheGet($cacheKey);
-        if (is_array($cachedPayload) && isset($cachedPayload['adapted_text'])) {
-            return response()->json(array_merge($cachedPayload, [
-                'cached' => true,
-                'original_text' => $chunk->chunk_text,
-                'profile' => $profileArray,
-                'presentation' => $presentationConfig,
-            ]));
-        }
-
-        // Fetch instructor adaptation settings (courseId/sectionId resolved above)
-
+        // Fetch instructor adaptation settings (courseId/sectionId resolved above) — needed
+        // both to build the cache signature and to drive the adaptation prompt.
         $settings = AdaptationSetting::where('course_id', $courseId)
             ->where('topic_id', $sectionId)
             ->first();
@@ -364,6 +348,52 @@ class AdaptiveContentController extends Controller
             'max_difficulty' => 5,
             'ai_confidence_threshold' => 0.75,
         ];
+
+        // Adapted content depends only on the learner's LEVEL-SIGNATURE (level + pace + modality
+        // + presentation mode + instructor enrichment policy), NOT on student identity. Keying
+        // the cache by this coarse signature lets every learner at the same level share ONE
+        // generated copy — collapsing Gemini calls from (students x chunks) to (variants x
+        // chunks) and keeping quota usage bounded regardless of enrollment size.
+        $signature = md5(json_encode([
+            'knowledge_level'    => $contentProfile['knowledge_level'] ?? 'intermediate',
+            'pace'               => $contentProfile['pace'] ?? 'medium',
+            'preferred_modality' => $profileArray['preferred_modality'] ?? 'text',
+            'presentation_mode'  => $mode,
+            'enrichment'         => ((bool) ($settingsArray['allow_analogies'] ?? true)) || ((bool) ($settingsArray['allow_example_substitution'] ?? true)),
+            'lock_definitions'   => (bool) ($settingsArray['lock_technical_definitions'] ?? true),
+            'max_difficulty'     => (int) ($settingsArray['max_difficulty'] ?? 5),
+        ]));
+
+        // Shared cache key (no student id). Version suffix supersedes pre-deploy payloads.
+        $cacheKey = "adapt:chunk:{$chunkId}:{$signature}:" . self::ADAPTATION_CACHE_VERSION;
+
+        // Check file cache for previously adapted payload
+        $cachedPayload = $this->fileCacheGet($cacheKey);
+        if (is_array($cachedPayload) && isset($cachedPayload['adapted_text'])) {
+            return response()->json(array_merge($cachedPayload, [
+                'cached' => true,
+                'original_text' => $chunk->chunk_text,
+                'profile' => $profileArray,
+                'presentation' => $presentationConfig,
+            ]));
+        }
+
+        // If Gemini recently rate-limited, skip the call and serve the original now. Protects
+        // the shared quota (and the AI tutor) from a cache-miss stampede during a 429 window.
+        if ($this->geminiService->isCoolingDown()) {
+            return response()->json($this->deliveryPayload(
+                chunk: $chunk,
+                displayText: $chunk->chunk_text,
+                profile: $profileArray,
+                presentation: $presentationConfig,
+                settings: $settingsArray,
+                deliveryStatus: 'fallback',
+                contentAdapted: false,
+                presentationActive: (bool) ($presentationConfig['is_active'] ?? false),
+                integrity: ['instructor_content_immutable' => true],
+                extra: ['fallback_reason' => 'AI temporarily rate-limited'],
+            ));
+        }
 
         $lessonCtx = $this->buildLessonContext($chunk, $presentationConfig);
         $rawAdapted = $this->geminiService->adapt($chunk->chunk_text, $profileArray, $settingsArray, $lessonCtx);
