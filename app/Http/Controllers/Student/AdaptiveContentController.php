@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Student;
 use App\Http\Controllers\Controller;
 use App\Jobs\RecalculateProfileJob;
 use App\Models\Activity;
+use App\Models\AdaptationCache;
 use App\Models\AdaptationLog;
 use App\Models\AdaptationSetting;
 use App\Models\ContentChunk;
@@ -354,6 +355,10 @@ class AdaptiveContentController extends Controller
         // the cache by this coarse signature lets every learner at the same level share ONE
         // generated copy — collapsing Gemini calls from (students x chunks) to (variants x
         // chunks) and keeping quota usage bounded regardless of enrollment size.
+        // content_hash is part of the signature so an instructor edit to the source chunk
+        // changes the signature and forces regeneration (otherwise "reuse forever" would serve
+        // stale text after an edit).
+        $contentHash = md5($chunk->chunk_text);
         $signature = md5(json_encode([
             'knowledge_level'    => $contentProfile['knowledge_level'] ?? 'intermediate',
             'pace'               => $contentProfile['pace'] ?? 'medium',
@@ -362,6 +367,7 @@ class AdaptiveContentController extends Controller
             'enrichment'         => ((bool) ($settingsArray['allow_analogies'] ?? true)) || ((bool) ($settingsArray['allow_example_substitution'] ?? true)),
             'lock_definitions'   => (bool) ($settingsArray['lock_technical_definitions'] ?? true),
             'max_difficulty'     => (int) ($settingsArray['max_difficulty'] ?? 5),
+            'content_hash'       => $contentHash,
         ]));
 
         // Shared cache key (no student id). Version suffix supersedes pre-deploy payloads.
@@ -376,6 +382,36 @@ class AdaptiveContentController extends Controller
                 'profile' => $profileArray,
                 'presentation' => $presentationConfig,
             ]));
+        }
+
+        // Persistent reuse: a copy generated once for this (chunk, signature) is reused forever
+        // — surviving the file cache TTL, deploys, and a depleted quota. Served BEFORE the
+        // cooldown/Gemini path so already-personalized content needs no further token spend.
+        $persisted = AdaptationCache::where('chunk_id', $chunkId)
+            ->where('signature', $signature)
+            ->where('cache_version', self::ADAPTATION_CACHE_VERSION)
+            ->first();
+        if ($persisted) {
+            $payload = $this->deliveryPayload(
+                chunk: $chunk,
+                displayText: $persisted->adapted_text,
+                profile: $profileArray,
+                presentation: $presentationConfig,
+                settings: $settingsArray,
+                deliveryStatus: $persisted->delivery_status,
+                contentAdapted: true,
+                presentationActive: (bool) ($presentationConfig['is_active'] ?? false),
+                integrity: $persisted->integrity ?? ['instructor_content_immutable' => true],
+                extra: [
+                    'adaptation_id' => $persisted->adaptation_id,
+                    'cached' => true,
+                    'cache_source' => 'persistent',
+                    'similarity_to_original_percent' => $persisted->similarity_percent,
+                ],
+            );
+            $this->fileCachePut($cacheKey, $payload, now()->addSeconds(86400));
+
+            return response()->json($payload);
         }
 
         // If Gemini recently rate-limited, skip the call and serve the original now. Protects
@@ -456,6 +492,20 @@ class AdaptiveContentController extends Controller
                 'flagged' => false,
             ]);
             $adaptationId = $log->id;
+
+            // Persist the shared copy so this (chunk, signature) is never regenerated again
+            // (reused across all same-level learners, deploys, and TTL expiry).
+            AdaptationCache::updateOrCreate(
+                ['chunk_id' => $chunkId, 'signature' => $signature, 'cache_version' => self::ADAPTATION_CACHE_VERSION],
+                [
+                    'content_hash' => $contentHash,
+                    'adapted_text' => $displayText,
+                    'delivery_status' => $deliveryStatus,
+                    'similarity_percent' => $assessment['similarity_percent'],
+                    'integrity' => $assessment['integrity'],
+                    'adaptation_id' => $adaptationId,
+                ],
+            );
         }
 
         $payload = $this->deliveryPayload(
