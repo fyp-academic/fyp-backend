@@ -37,7 +37,7 @@ class AdaptiveContentController extends Controller
      * delivery prompts or adaptation logic in GeminiAdaptationService change, so previously
      * cached adaptations are treated as misses and regenerated instead of replayed for 24h.
      */
-    private const ADAPTATION_CACHE_VERSION = 'v2-narrative-hook';
+    private const ADAPTATION_CACHE_VERSION = 'v3-content-adapt';
 
     public function __construct(
         private GeminiAdaptationService $geminiService,

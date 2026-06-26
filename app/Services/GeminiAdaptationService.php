@@ -64,6 +64,12 @@ class GeminiAdaptationService
                 'temperature' => 0.4,
                 'maxOutputTokens' => $maxTokens,
                 'topP' => 0.85,
+                // gemini-2.5-flash is a reasoning model whose "thinking" tokens count against
+                // maxOutputTokens. Left on, thinking consumes the whole budget and the actual
+                // rewrite is truncated (finishReason=MAX_TOKENS) → integrity rejects it as too
+                // short → original served for every learner. This rewrite needs no deep
+                // reasoning, so disable thinking and give the full budget to the output.
+                'thinkingConfig' => ['thinkingBudget' => 0],
             ],
             'systemInstruction' => [
                 'parts' => [['text' => $systemPrompt]],
@@ -164,10 +170,11 @@ class GeminiAdaptationService
     private function resolveMaxTokens(string $originalText, array $settings): int
     {
         $wordCount = str_word_count(strip_tags($originalText));
-        $maxDifficulty = (int) ($settings['max_difficulty'] ?? 5);
-        // Headroom for enrichment (advanced high-performers get up to two scenarios plus
-        // Socratic prompts ~2.4x original) plus markdown overhead.
-        $scaled = (int) min(1600, max(200, $wordCount * (3 + ($maxDifficulty * 0.4))));
+        // Generous output budget so enriched output (advanced ~2.4x original, plus Socratic
+        // prompts/scenarios and markdown) never hits MAX_TOKENS and gets truncated. With
+        // thinking disabled the whole budget is available for the visible rewrite. ~1 word ≈
+        // 1.4 tokens; budget ~6 tokens/word covers a 2.4x expansion with comfortable headroom.
+        $scaled = (int) min(2048, max(512, $wordCount * 6));
 
         return $scaled;
     }
@@ -242,9 +249,11 @@ TXT;
                 ? 'Write denser, more sophisticated prose. Surface the relationships between ideas already in the original, then anchor the core concept with UP TO TWO concise worked scenarios or analogies that illustrate it (no new facts). Where it deepens reasoning, pose one or two short Socratic "why / what-if" questions about a concept just covered, each followed by a one-to-two sentence reasoning walkthrough (thinking prompts only — never graded, never resembling a quiz question). Compress obvious repetition.'
                 : 'Emphasize connections between ideas already in the original. Compress repetition. Do not add new material.',
             'novice' => $enrichmentEnabled
-                ? 'Maximize scaffolding: break the explanation into short numbered micro-steps, add inline clarifications of terms already defined in the original, and ground the idea with ONE simple everyday analogy that illustrates it (no new facts).'
-                : 'Add scaffolding using only original wording: short numbered steps, inline clarifications of terms already defined in the original.',
-            default => 'Balance clarity and brevity using only the original material.',
+                ? 'Apply Mayer\'s Signaling for a novice learner: break the explanation into short numbered micro-steps, open each step with a directional cue ("First, …", "Next, …", "Finally, …"), bold the key technical terms on first mention, add brief inline clarifications of terms already defined in the original, and ground the idea with ONE simple everyday analogy that illustrates it (no new facts).'
+                : 'Apply Mayer\'s Signaling using only the original wording: short numbered steps, each opening with a directional cue ("First, …", "Next, …"), bold key terms on first mention, and brief inline clarifications of terms already defined in the original.',
+            default => $enrichmentEnabled
+                ? 'Write balanced, clear prose. Surface a couple of key connections between ideas already in the original, anchor the concept with ONE concise worked example or analogy that illustrates it (no new facts), and pose ONE gentle Socratic "why / what-if" question about a concept just covered, followed by a one-to-two sentence reasoning walkthrough (a thinking prompt only — never graded, never resembling a quiz question).'
+                : 'Write balanced, clear prose that surfaces a couple of key connections between ideas already in the original, and pose ONE gentle reflective "why / what-if" question followed by a one-to-two sentence reasoning walkthrough (no new facts, never a quiz question).',
         };
 
         $paceInstruction = match ($pace) {
@@ -270,12 +279,16 @@ TXT;
         $originalWords = str_word_count(strip_tags($originalText));
         $enrichmentForLevel = $enrichmentEnabled && in_array($knowledgeLevel, ['advanced', 'novice'], true);
         $advancedEnriched = $enrichmentEnabled && $knowledgeLevel === 'advanced';
+        $intermediateEnriched = $enrichmentEnabled && $knowledgeLevel === 'intermediate';
         if ($advancedEnriched) {
             $budgetMultiplier = 2.4;
             $budgetCeiling = 800;
-        } elseif ($enrichmentForLevel) {
+        } elseif ($enrichmentForLevel) { // novice scaffolding
             $budgetMultiplier = 2.0;
             $budgetCeiling = 650;
+        } elseif ($intermediateEnriched) { // worked example + one reflective question
+            $budgetMultiplier = 1.7;
+            $budgetCeiling = 550;
         } else {
             $budgetMultiplier = 1.25;
             $budgetCeiling = 400;

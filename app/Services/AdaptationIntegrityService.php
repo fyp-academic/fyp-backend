@@ -17,6 +17,12 @@ class AdaptationIntegrityService
 
     private const MAX_LENGTH_RATIO = 2.2;
 
+    // Absolute expansion headroom (characters). Short originals legitimately expand well past
+    // the ratio cap when scaffolded/enriched — a ~575-char concept becomes ~1900 chars for a
+    // fully signaled novice explanation. The ratio still bounds long content; this only spares
+    // short content from a false "too long" rejection (it is a ceiling, never a target).
+    private const ENRICHMENT_CHAR_HEADROOM = 1600;
+
     /** @var list<string> */
     private array $aiPreamblePatterns = [
         '/^here is the adapted version:?\s*/i',
@@ -55,8 +61,13 @@ class AdaptationIntegrityService
         // The advanced high-performer path adds extra scenarios + Socratic prompts, so the
         // caller may raise the ceiling for that adaptation only; everyone else keeps 2.2x.
         $maxLengthRatio = (float) ($settings['max_length_ratio'] ?? self::MAX_LENGTH_RATIO);
-        $lengthRatio = strlen($cleaned) / max(strlen($original), 1);
-        $lengthOk = $lengthRatio >= self::MIN_LENGTH_RATIO && $lengthRatio <= $maxLengthRatio;
+        $origLen = max(strlen($original), 1);
+        $cleanedLen = strlen($cleaned);
+        // Max allowed length is the greater of the ratio cap and a generous absolute headroom,
+        // so short originals can be legitimately scaffolded/enriched while long content stays
+        // ratio-bounded.
+        $maxLen = max((int) round($origLen * $maxLengthRatio), $origLen + self::ENRICHMENT_CHAR_HEADROOM);
+        $lengthOk = $cleanedLen >= $origLen * self::MIN_LENGTH_RATIO && $cleanedLen <= $maxLen;
 
         $preventRewrite = (bool) ($settings['prevent_assessment_rewrite'] ?? true);
         if ($preventRewrite && $this->looksLikeAssessment($original)) {
