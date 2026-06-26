@@ -56,6 +56,7 @@ class DiagnosePersonalization extends Command
         $key = (string) (config('services.gemini.api_key') ?? '');
         $this->line('Gemini API key: '.($key !== '' ? 'set (len '.strlen($key).')' : 'MISSING'));
         $this->line('Gemini model:   '.(string) config('services.gemini.model'));
+        $this->line('Gemini base_url: '.(string) config('services.gemini.base_url').'  (expected: https://generativelanguage.googleapis.com/v1beta)');
         $this->line('Adapt cooldown (recent 429): '.($gemini->isCoolingDown() ? 'ACTIVE — quota/rate-limited' : 'off'));
         $this->line('Deployed cache version: '.$this->cacheVersion().'  (expected: v4-shared)');
         $this->line('AdaptationLog rows (all-time successes): '.AdaptationLog::count());
@@ -67,6 +68,7 @@ class DiagnosePersonalization extends Command
         $this->line('');
         $this->info('── Gemini connectivity probe ──');
         $p1 = $this->probeGemini($key, false);
+        $this->line('request URL: '.$p1['url']);
         $this->line('probe (no thinkingConfig): HTTP '.$p1['status'].'  '.$p1['body']);
         $p2 = $this->probeGemini($key, true);
         $this->line('probe (thinkingBudget=0) : HTTP '.$p2['status'].'  '.$p2['body']);
@@ -141,18 +143,20 @@ class DiagnosePersonalization extends Command
      * Minimal raw generateContent call. Returns the real HTTP status + a body snippet so the
      * exact Google error is visible (adapt() swallows it and returns null).
      *
-     * @return array{status: int|string, body: string}
+     * @return array{status: int|string, body: string, url: string}
      */
     private function probeGemini(string $key, bool $withThinking): array
     {
-        if ($key === '') {
-            return ['status' => 'n/a', 'body' => 'GEMINI_API_KEY not set'];
-        }
-
         $model = (string) (config('services.gemini.model') ?? 'gemini-2.5-flash');
         $baseUrl = rtrim((string) (config('services.gemini.base_url') ?? 'https://generativelanguage.googleapis.com/v1beta'), '/');
-        $url = "{$baseUrl}/models/{$model}:generateContent?key={$key}";
+        $redactedKey = $key === '' ? 'MISSING' : mb_substr($key, 0, 6).'…REDACTED';
+        $redactedUrl = "{$baseUrl}/models/{$model}:generateContent?key={$redactedKey}";
 
+        if ($key === '') {
+            return ['status' => 'n/a', 'body' => 'GEMINI_API_KEY not set', 'url' => $redactedUrl];
+        }
+
+        $url = "{$baseUrl}/models/{$model}:generateContent?key={$key}";
         $generationConfig = ['maxOutputTokens' => 1];
         if ($withThinking) {
             $generationConfig['thinkingConfig'] = ['thinkingBudget' => 0];
@@ -164,46 +168,49 @@ class DiagnosePersonalization extends Command
                 'generationConfig' => $generationConfig,
             ]);
 
+            $body = trim(preg_replace('/\s+/', ' ', $resp->body()) ?? '');
+
             return [
                 'status' => $resp->status(),
-                'body' => mb_substr(preg_replace('/\s+/', ' ', $resp->body()) ?? '', 0, 400),
+                'body' => $body === '' ? '(empty body)' : mb_substr($body, 0, 400),
+                'url' => $redactedUrl,
             ];
         } catch (\Throwable $e) {
-            return ['status' => 'EXC', 'body' => get_class($e).': '.$e->getMessage()];
+            return ['status' => 'EXC', 'body' => get_class($e).': '.$e->getMessage(), 'url' => $redactedUrl];
         }
     }
 
     /**
-     * @param  array{status: int|string, body: string}  $p1
-     * @param  array{status: int|string, body: string}  $p2
+     * @param  array{status: int|string, body: string, url: string}  $p1
+     * @param  array{status: int|string, body: string, url: string}  $p2
      */
     private function interpretProbe(array $p1, array $p2): string
     {
         $s1 = $p1['status'];
         $s2 = $p2['status'];
+        $blob = strtolower($p1['body'].' '.$p2['body']);
 
         if ($s1 === 200 && $s2 === 200) {
             return 'Gemini key/project OK. If chunks still fail, investigate payload size or transient errors.';
         }
-        if ($s1 === 200 && $s2 !== 200) {
-            return "thinkingConfig is rejected in this environment (probe #2 failed) — model/endpoint does not support thinkingBudget. Remove it or change model.";
+        // Hard errors first — these explain a failing probe regardless of which one failed.
+        if ($s1 === 429 || $s2 === 429 || str_contains($blob, 'quota') || str_contains($blob, 'rate-limit')) {
+            return 'Quota/rate limit (429) — free tier is tiny (limit ~20/day). Wait for reset or enable billing. (Key/URL are otherwise fine if a probe returned 200.)';
         }
-
-        $blob = strtolower($p1['body'].' '.$p2['body']);
+        if ($s1 === 404 || $s2 === 404) {
+            return 'GEMINI_BASE_URL is wrong in prod .env (should end in /v1beta) OR GEMINI_MODEL is unavailable on this endpoint — see the request URL above. Fix .env, then config:clear && config:cache && reload php-fpm.';
+        }
         if (str_contains($blob, 'api_key_invalid') || str_contains($blob, 'api key not valid')) {
             return 'GEMINI_API_KEY is invalid/expired in prod .env — replace it.';
         }
         if (str_contains($blob, 'permission_denied') || str_contains($blob, 'has not been used') || str_contains($blob, 'is disabled') || str_contains($blob, 'service_disabled')) {
             return 'Generative Language API is not enabled for this key\'s Google Cloud project, OR the key has referrer/IP restrictions blocking this server. Enable the API / remove key restrictions.';
         }
-        if (str_contains($blob, 'not found') || $s1 === 404 || $s2 === 404) {
-            return 'Model not found — fix GEMINI_MODEL in prod .env (current: '.(string) config('services.gemini.model').').';
-        }
-        if ($s1 === 429 || $s2 === 429) {
-            return 'Quota/rate limit (429) — wait for reset or enable billing.';
+        if ($s1 === 200 && $s2 === 400 && str_contains($blob, 'thinking')) {
+            return 'thinkingConfig is rejected here (probe #1 ok, probe #2 = 400 on thinkingBudget) — this model/endpoint does not support it.';
         }
 
-        return 'Unexpected Gemini error — see the status/body above.';
+        return "Unexpected Gemini error (probe #1 HTTP {$s1}, probe #2 HTTP {$s2}) — see the status/body above.";
     }
 
     private function cacheVersion(): string
