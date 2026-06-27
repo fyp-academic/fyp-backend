@@ -352,13 +352,17 @@ class ProctoringController extends Controller
                 // submission even if the browser is closed/compromised. Create the
                 // row when none exists yet (untimed practical whose autosave never
                 // fired) so a violation auto-submit is never lost.
+                $activity = Activity::find($session->activity_id);
                 $sub = PracticalSubmission::firstOrNew([
                     'activity_id' => $session->activity_id,
                     'student_id'  => $session->student_id,
                 ]);
                 if (! $sub->exists) {
                     $sub->id         = (string) Str::uuid();
-                    $sub->course_id  = $session->course_id;
+                    // Use the activity's real course, not the proctoring session's —
+                    // the session can carry a different/wrong course, which would hide
+                    // the row from the instructor's course-scoped view.
+                    $sub->course_id  = $activity->course_id ?? $session->course_id;
                     $sub->files      = ['html' => '', 'css' => '', 'js' => ''];
                     $sub->started_at = $sub->started_at ?? now();
                 }
@@ -367,7 +371,6 @@ class ProctoringController extends Controller
                     $sub->submitted_at   = now();
                     $sub->auto_submitted = true;
                     $sub->save();
-                    $activity = Activity::find($session->activity_id);
                     if ($activity) {
                         app(ActivityResultService::class)->recordCompletion($activity, $session->student_id);
                     }
