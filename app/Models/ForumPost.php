@@ -14,15 +14,17 @@ class ForumPost extends Model
     protected $fillable = [
         'id', 'discussion_id', 'user_id', 'parent_id',
         'subject', 'content', 'attachment_path',
-        'likes_count', 'quality_score', 'sentiment', 'depth_level',
+        'likes_count', 'dislikes_count', 'anonymous', 'quality_score', 'sentiment', 'depth_level',
     ];
 
     protected function casts(): array
     {
         return [
-            'likes_count'   => 'integer',
-            'quality_score' => 'float',
-            'depth_level'   => 'integer',
+            'likes_count'    => 'integer',
+            'dislikes_count' => 'integer',
+            'anonymous'      => 'boolean',
+            'quality_score'  => 'float',
+            'depth_level'    => 'integer',
         ];
     }
 
@@ -44,5 +46,10 @@ class ForumPost extends Model
     public function replies(): HasMany
     {
         return $this->hasMany(ForumPost::class, 'parent_id');
+    }
+
+    public function reactions(): HasMany
+    {
+        return $this->hasMany(ForumPostReaction::class, 'post_id');
     }
 }

@@ -24,6 +24,7 @@ use App\Http\Controllers\DatabaseActivityController;
 use App\Http\Controllers\FeedbackController;
 use App\Http\Controllers\FolderController;
 use App\Http\Controllers\ForumController;
+use App\Http\Controllers\PracticalController;
 use App\Http\Controllers\GlossaryController;
 use App\Http\Controllers\LessonController;
 use App\Http\Controllers\ScormController;
@@ -150,6 +151,8 @@ Route::prefix('v1')->group(function () {
         Route::post('/activities/{id}/complete', [ActivityController::class, 'complete']);
         Route::get('/activities/{id}/discussions', [ForumController::class, 'discussions']);
         Route::post('/activities/{id}/discussions', [ForumController::class, 'createDiscussion']);
+        Route::get('/activities/{id}/discussion', [ForumController::class, 'discussionForActivity']);
+        Route::get('/activities/{id}/practical-template', [PracticalController::class, 'showTemplate']);
 
         // ─────────────────────────────────────────────────────────────────────
         // AI TUTOR WIDGET (Authenticated students)
@@ -584,6 +587,7 @@ Route::middleware('auth:sanctum')->prefix('interventions')->group(function () {
 // ─────────────────────────────────────────────────────────────────────
 
 // Assignment submissions
+Route::middleware('auth:sanctum')->post('activities/{id}/assignment-start', [AssignmentController::class, 'start']);
 Route::middleware('auth:sanctum')->post('activities/{id}/submissions', [AssignmentController::class, 'store']);
 Route::middleware('auth:sanctum')->get('my-submissions', [AssignmentController::class, 'mySubmissions']);
 Route::middleware('auth:sanctum')->get('my-group-works', [AssignmentController::class, 'myGroupWorks']);
@@ -642,6 +646,20 @@ Route::middleware('auth:sanctum')->prefix('discussions/{id}')->group(function ()
     Route::post('posts',  [ForumController::class, 'reply']);
     Route::patch('lock',  [ForumController::class, 'toggleLock']);
     Route::patch('pin',   [ForumController::class, 'togglePin']);
+});
+
+// Forum/discussion post reactions (like / dislike)
+Route::middleware('auth:sanctum')->post('posts/{id}/react', [ForumController::class, 'react']);
+
+// Practical Problem — student submissions
+Route::middleware('auth:sanctum')->get('activities/{id}/practical-submission',  [PracticalController::class, 'mySubmission']);
+Route::middleware('auth:sanctum')->post('activities/{id}/practical-submission', [PracticalController::class, 'save']);
+
+// Practical Problem — instructor review & grading
+Route::middleware('auth:sanctum')->middleware('admin.or.instructor')->group(function () {
+    Route::get('activities/{id}/practical-submissions', [PracticalController::class, 'submissions']);
+    Route::get('practical-submissions/{id}',            [PracticalController::class, 'submission']);
+    Route::post('practical-submissions/{id}/grade',     [PracticalController::class, 'grade']);
 });
 
 // Glossary entries

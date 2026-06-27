@@ -9,6 +9,7 @@ use Illuminate\Support\Str;
 use App\Models\Activity;
 use App\Models\ForumDiscussion;
 use App\Models\ForumPost;
+use App\Models\ForumPostReaction;
 use App\Services\EngagementComputationService;
 use Illuminate\Support\Facades\Log;
 
@@ -136,6 +137,15 @@ class ForumController extends Controller
             $depthLevel = $parent ? (($parent->depth_level ?? 0) + 1) : 1;
         }
 
+        // Anonymity is driven by the parent discussion-activity's settings:
+        //   full   → every reply is forced anonymous
+        //   partial→ the student may choose (request `anonymous`)
+        //   off    → never anonymous
+        $anonMode = $this->anonymousMode($discussion);
+        $anonymous = $anonMode === 'full'
+            ? true
+            : ($anonMode === 'partial' ? (bool) $request->input('anonymous', false) : false);
+
         $post = ForumPost::create([
             'id'            => Str::uuid()->toString(),
             'discussion_id' => $id,
@@ -143,6 +153,7 @@ class ForumController extends Controller
             'parent_id'     => $parentId,
             'content'       => $request->content,
             'depth_level'   => $depthLevel,
+            'anonymous'     => $anonymous,
         ]);
 
         $discussion->increment('post_count');
@@ -192,5 +203,186 @@ class ForumController extends Controller
             'message' => $discussion->pinned ? 'Discussion pinned.' : 'Discussion unpinned.',
             'data'    => $discussion,
         ]);
+    }
+
+    // ── Reactions ───────────────────────────────────────────────────────
+
+    /**
+     * POST /api/v1/posts/{id}/react   body: { value: 1 | -1 }
+     * Like (1) / dislike (-1) a post. Re-sending the same value clears it (toggle).
+     * Recomputes the denormalized likes_count / dislikes_count cache.
+     */
+    public function react(Request $request, string $id): JsonResponse
+    {
+        $validator = Validator::make($request->all(), [
+            'value' => 'required|integer|in:1,-1',
+        ]);
+        if ($validator->fails()) {
+            return response()->json(['errors' => $validator->errors()], 422);
+        }
+
+        $post   = ForumPost::findOrFail($id);
+        $userId = $request->user()->id;
+        $value  = (int) $request->input('value');
+
+        $existing = ForumPostReaction::where('post_id', $id)->where('user_id', $userId)->first();
+
+        if ($existing && $existing->value === $value) {
+            $existing->delete();            // toggle off
+            $mine = 0;
+        } else {
+            ForumPostReaction::updateOrCreate(
+                ['post_id' => $id, 'user_id' => $userId],
+                ['id' => $existing->id ?? Str::uuid()->toString(), 'value' => $value]
+            );
+            $mine = $value;
+        }
+
+        $post->likes_count    = ForumPostReaction::where('post_id', $id)->where('value', 1)->count();
+        $post->dislikes_count = ForumPostReaction::where('post_id', $id)->where('value', -1)->count();
+        $post->save();
+
+        return response()->json([
+            'likes_count'    => $post->likes_count,
+            'dislikes_count' => $post->dislikes_count,
+            'my_reaction'    => $mine,
+        ]);
+    }
+
+    // ── Discussion activity (single-topic) ──────────────────────────────
+
+    /**
+     * GET /api/v1/activities/{id}/discussion
+     * Returns the single topic + replies for a `discussion` activity, applying
+     * the activity's anonymity, sort and "must post before viewing" options.
+     * The topic is lazily created from the activity on first access.
+     */
+    public function discussionForActivity(Request $request, string $id): JsonResponse
+    {
+        $activity   = Activity::findOrFail($id);
+        $settings   = $activity->settings ?? [];
+        $discussion = $this->ensureTopic($activity);
+        $userId     = optional($request->user())->id;
+
+        $topicPost = ForumPost::where('discussion_id', $discussion->id)
+            ->where('depth_level', 0)->with('user:id,name,profile_image')->first();
+
+        $sortDir = ($settings['default_sort'] ?? 'oldest') === 'newest' ? 'desc' : 'asc';
+        $replies = ForumPost::where('discussion_id', $discussion->id)
+            ->where('depth_level', '>', 0)
+            ->with('user:id,name,profile_image')
+            ->orderBy('created_at', $sortDir)
+            ->get();
+
+        // "Participants must respond before viewing other replies"
+        $hasPosted = $userId
+            ? $replies->contains(fn ($p) => $p->user_id === $userId)
+            : false;
+        $gated = (bool) ($settings['require_post_before_view'] ?? false);
+        $instructorId = $activity->course?->instructor_id;
+        $locked = $gated && ! $hasPosted && $userId !== $instructorId;
+
+        $reactionMap = $this->reactionMap($replies->pluck('id')->all(), $userId);
+
+        $payload = [
+            'activity_id'   => $id,
+            'discussion_id' => $discussion->id,
+            'title'         => $activity->name,
+            'content'       => $topicPost?->content ?? ($activity->description ?? ''),
+            'options'       => [
+                'anonymous_mode'       => $this->anonymousMode($discussion),
+                'disallow_threaded'    => (bool) ($settings['disallow_threaded'] ?? false),
+                'allow_liking'         => (bool) ($settings['allow_liking'] ?? true),
+                'graded'               => (bool) ($settings['graded'] ?? false),
+                'default_thread_state' => $settings['default_thread_state'] ?? 'expanded',
+                'lock_thread_state'    => (bool) ($settings['lock_thread_state'] ?? false),
+                'default_sort'         => $settings['default_sort'] ?? 'oldest',
+                'lock_sort'            => (bool) ($settings['lock_sort'] ?? false),
+                'require_post_before_view' => $gated,
+            ],
+            'reply_count'   => $replies->count(),
+            'has_posted'    => $hasPosted,
+            'locked'        => $locked,
+            'replies'       => $locked ? [] : $replies->map(fn ($p) => $this->serializePost($p, $reactionMap, $userId))->values(),
+        ];
+
+        return response()->json($payload);
+    }
+
+    /**
+     * Lazily create the single ForumDiscussion topic for a discussion activity.
+     */
+    private function ensureTopic(Activity $activity): ForumDiscussion
+    {
+        $discussion = ForumDiscussion::where('activity_id', $activity->id)->first();
+        if ($discussion) {
+            return $discussion;
+        }
+
+        $discussion = ForumDiscussion::create([
+            'id'          => Str::uuid()->toString(),
+            'activity_id' => $activity->id,
+            'course_id'   => $activity->course_id,
+            'user_id'     => $activity->course?->instructor_id,
+            'title'       => $activity->name,
+            'pinned'      => false,
+            'locked'      => false,
+            'post_count'  => 1,
+        ]);
+
+        ForumPost::create([
+            'id'            => Str::uuid()->toString(),
+            'discussion_id' => $discussion->id,
+            'user_id'       => $discussion->user_id,
+            'subject'       => $activity->name,
+            'content'       => $activity->description ?? '',
+            'depth_level'   => 0,
+        ]);
+
+        return $discussion;
+    }
+
+    private function anonymousMode(ForumDiscussion $discussion): string
+    {
+        $settings = optional($discussion->activity)->settings ?? [];
+        $mode = $settings['anonymous_mode'] ?? 'off';
+        return in_array($mode, ['off', 'partial', 'full'], true) ? $mode : 'off';
+    }
+
+    /**
+     * Map of post_id => ['likes'=>n,'dislikes'=>n,'mine'=>1|-1|0] for the viewer.
+     */
+    private function reactionMap(array $postIds, ?string $userId): array
+    {
+        if (empty($postIds)) {
+            return [];
+        }
+        $mine = [];
+        if ($userId) {
+            $mine = ForumPostReaction::whereIn('post_id', $postIds)
+                ->where('user_id', $userId)
+                ->pluck('value', 'post_id')->all();
+        }
+        return ['mine' => $mine];
+    }
+
+    private function serializePost(ForumPost $post, array $reactionMap, ?string $userId): array
+    {
+        $anonymous = (bool) $post->anonymous;
+        return [
+            'id'             => $post->id,
+            'parent_id'      => $post->parent_id,
+            'content'        => $post->content,
+            'depth_level'    => $post->depth_level,
+            'created_at'     => $post->created_at,
+            'likes_count'    => (int) $post->likes_count,
+            'dislikes_count' => (int) $post->dislikes_count,
+            'my_reaction'    => (int) (($reactionMap['mine'] ?? [])[$post->id] ?? 0),
+            'anonymous'      => $anonymous,
+            'author'         => $anonymous
+                ? ['id' => null, 'name' => 'Anonymous', 'avatar' => null]
+                : ['id' => $post->user?->id, 'name' => $post->user?->name, 'avatar' => $post->user?->profile_image ?? null],
+            'is_mine'        => $userId !== null && $post->user_id === $userId,
+        ];
     }
 }

@@ -121,6 +121,48 @@ trait TimeEnforcementHelper
     }
 
     /**
+     * Read an activity's per-attempt time limit (minutes) from settings.timeLimit.
+     * Shared convention across quiz, practical and (text-only) assignment.
+     * Returns null when unset / non-positive (= untimed).
+     */
+    protected function resolveActivityTimeLimit(Activity $activity): ?int
+    {
+        $limit = ($activity->settings ?? [])['timeLimit'] ?? null;
+        return is_numeric($limit) && (int) $limit > 0 ? (int) $limit : null;
+    }
+
+    /**
+     * Hard deadline for a timed attempt: started_at + limit minutes.
+     * Null when either input is missing (= no deadline).
+     */
+    protected function deadlineFromStart(?Carbon $startedAt, ?int $minutes): ?Carbon
+    {
+        return ($startedAt && $minutes) ? $startedAt->copy()->addMinutes($minutes) : null;
+    }
+
+    /**
+     * Standard client payload for a deadline so every timed surface agrees:
+     * the client seeds its countdown from `time_limit_seconds` (remaining) and
+     * `server_time`, never its own clock. Mirrors QuizController::startAttempt.
+     */
+    protected function deadlinePayload(?Carbon $deadline): array
+    {
+        return [
+            'expires_at'         => $deadline?->toIso8601String(),
+            'time_limit_seconds' => $deadline ? max(0, (int) now()->diffInSeconds($deadline, false)) : null,
+            'server_time'        => now()->toIso8601String(),
+        ];
+    }
+
+    /**
+     * Whether a submission at `now` is past the deadline (with a small grace).
+     */
+    protected function isPastDeadline(?Carbon $deadline, int $graceSeconds = 30): bool
+    {
+        return $deadline !== null && now()->gt($deadline->copy()->addSeconds($graceSeconds));
+    }
+
+    /**
      * Get time status for a session.
      * Sessions have scheduled_at (when session should start) and duration (in minutes).
      * Calculated end time is scheduled_at + duration.

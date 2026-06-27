@@ -13,14 +13,70 @@ use App\Models\Enrollment;
 use App\Models\User;
 use App\Services\EngagementComputationService;
 use App\Services\GradeService;
+use App\Traits\TimeEnforcementHelper;
 use Illuminate\Support\Facades\Log;
 
 class AssignmentController extends Controller
 {
+    use TimeEnforcementHelper;
+
     public function __construct(
         private EngagementComputationService $engagement,
         private GradeService $grades,
     ) {}
+
+    /**
+     * Whether this assignment is configured as online-text-only (the only mode
+     * a per-attempt countdown applies to).
+     */
+    private function isTextOnly(array $settings): bool
+    {
+        return (bool) ($settings['textOnlineEnabled'] ?? false)
+            && ! (bool) ($settings['fileSubmissionEnabled'] ?? true);
+    }
+
+    /**
+     * POST /api/v1/activities/{id}/assignment-start  (student)
+     * For a timed, text-only assignment this records the authoritative clock
+     * start (an in-progress draft) and returns the deadline payload. For any
+     * other assignment it is a no-op that returns a null deadline.
+     */
+    public function start(Request $request, string $id): JsonResponse
+    {
+        $activity = Activity::findOrFail($id);
+        $user     = $request->user();
+        $settings = is_array($activity->settings) ? $activity->settings : [];
+        $limit    = $this->resolveActivityTimeLimit($activity);
+
+        if (! $this->isTextOnly($settings) || ! $limit) {
+            return response()->json(array_merge(['timed' => false], $this->deadlinePayload(null)));
+        }
+
+        // Reuse an existing in-progress draft so refreshing doesn't reset the clock.
+        $draft = AssignmentSubmission::where('activity_id', $id)
+            ->where('student_id', $user->id)
+            ->where('status', 'in_progress')
+            ->orderByDesc('started_at')
+            ->first();
+
+        if (! $draft) {
+            $draft = AssignmentSubmission::create([
+                'id'          => Str::uuid()->toString(),
+                'activity_id' => $id,
+                'student_id'  => $user->id,
+                'course_id'   => $activity->course_id,
+                'status'      => 'in_progress',
+                'started_at'  => now(),
+            ]);
+        }
+
+        $deadline = $this->deadlineFromStart($draft->started_at, $limit);
+
+        return response()->json(array_merge(
+            ['timed' => true, 'time_limit_minutes' => $limit],
+            $this->deadlinePayload($deadline),
+        ));
+    }
 
     /**
      * GET /api/v1/activities/{id}/submissions
@@ -111,7 +167,22 @@ class AssignmentController extends Controller
 
         $lastAttempt = AssignmentSubmission::where('activity_id', $id)
             ->where('student_id', $user->id)
+            ->where('status', '!=', 'in_progress')
             ->max('attempt_number') ?? 0;
+
+        // Timed text-only assignment: resolve the per-attempt deadline from the
+        // in-progress draft's authoritative start time, and flag late/auto-submit.
+        $limit       = $this->resolveActivityTimeLimit($activity);
+        $timedDraft  = ($this->isTextOnly($settings) && $limit)
+            ? AssignmentSubmission::where('activity_id', $id)
+                ->where('student_id', $user->id)
+                ->where('status', 'in_progress')
+                ->orderByDesc('started_at')
+                ->first()
+            : null;
+        $deadline      = $timedDraft ? $this->deadlineFromStart($timedDraft->started_at, $limit) : null;
+        $autoSubmitted = (bool) $request->boolean('auto_submitted');
+        $pastDeadline  = $this->isPastDeadline($deadline);
 
         $filePath = $request->input('file_path');
         $fileName = $request->input('file_name');
@@ -126,8 +197,9 @@ class AssignmentController extends Controller
             $fileSize = $uploaded->getSize();
         }
 
-        $submission = AssignmentSubmission::create([
-            'id'              => Str::uuid()->toString(),
+        $late = ($activity->due_date && now()->greaterThan($activity->due_date)) || $pastDeadline;
+
+        $attrs = [
             'activity_id'     => $id,
             'student_id'      => $user->id,
             'course_id'       => $activity->course_id,
@@ -139,8 +211,18 @@ class AssignmentController extends Controller
             'file_size'       => $fileSize,
             'submitted_at'    => now(),
             'attempt_number'  => $lastAttempt + 1,
-            'late'            => $activity->due_date && now()->greaterThan($activity->due_date),
-        ]);
+            'late'            => $late,
+            'auto_submitted'  => $autoSubmitted || $pastDeadline,
+        ];
+
+        // Promote the timed in-progress draft (keeping its started_at) instead of
+        // leaving an orphan row; otherwise create a fresh submission.
+        if ($timedDraft) {
+            $timedDraft->update($attrs);
+            $submission = $timedDraft;
+        } else {
+            $submission = AssignmentSubmission::create(array_merge(['id' => Str::uuid()->toString()], $attrs));
+        }
 
         // Engagement: log submission event and track revision count
         try {

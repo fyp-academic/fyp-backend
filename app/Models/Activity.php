@@ -22,6 +22,7 @@ class Activity extends Model
         'glossary', 'h5p', 'ims_content_package', 'lesson',
         'page', 'quiz', 'scorm', 'text_and_media_area',
         'url', 'label', 'workshop', 'video',
+        'practical', 'discussion',
     ];
 
     protected $fillable = [
@@ -173,5 +174,12 @@ class Activity extends Model
     public function courseMaterials(): HasMany
     {
         return $this->hasMany(CourseMaterial::class);
+    }
+
+    // ── Practical ──────────────────────────────────────────────────────
+
+    public function practicalSubmissions(): HasMany
+    {
+        return $this->hasMany(PracticalSubmission::class);
     }
 }
