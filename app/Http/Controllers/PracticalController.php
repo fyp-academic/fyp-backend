@@ -192,7 +192,15 @@ class PracticalController extends Controller
      */
     public function courseSubmissions(string $id): JsonResponse
     {
-        $subs = PracticalSubmission::where('course_id', $id)
+        // Match by the authoritative activity→course link (activities table) OR the
+        // submission's own course_id column, so a row whose course_id was recorded
+        // wrong (e.g. set from a proctoring session) is still found as long as its
+        // activity belongs to this course.
+        $activityIds = Activity::where('course_id', $id)->pluck('id');
+
+        $subs = PracticalSubmission::where(fn ($q) => $q
+                ->whereIn('activity_id', $activityIds)
+                ->orWhere('course_id', $id))
             ->with(['student:id,name,email', 'activity:id,name,grade_max'])
             ->orderByDesc('submitted_at')
             ->orderByDesc('updated_at')
