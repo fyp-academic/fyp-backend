@@ -661,6 +661,7 @@ Route::middleware('auth:sanctum')->post('activities/{id}/practical-submission', 
 // Practical Problem — instructor review & grading
 Route::middleware('auth:sanctum')->middleware('admin.or.instructor')->group(function () {
     Route::get('activities/{id}/practical-submissions', [PracticalController::class, 'submissions']);
+    Route::get('courses/{id}/practical-submissions',    [PracticalController::class, 'courseSubmissions']);
     Route::get('practical-submissions/{id}',            [PracticalController::class, 'submission']);
     Route::post('practical-submissions/{id}/grade',     [PracticalController::class, 'grade']);
 });

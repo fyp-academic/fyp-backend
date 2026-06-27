@@ -184,6 +184,24 @@ class PracticalController extends Controller
     }
 
     /**
+     * GET /api/v1/courses/{id}/practical-submissions  (instructor)
+     * Every practical submission in the course in one query — a course-level
+     * source so the instructor view doesn't depend on enumerating each activity
+     * (which can miss submissions whose activity_id is stale/outside the section
+     * traversal). Mirrors the student Grade Book, which reads submissions directly.
+     */
+    public function courseSubmissions(string $id): JsonResponse
+    {
+        $subs = PracticalSubmission::where('course_id', $id)
+            ->with(['student:id,name,email', 'activity:id,name,grade_max'])
+            ->orderByDesc('submitted_at')
+            ->orderByDesc('updated_at')
+            ->get();
+
+        return response()->json(['data' => $subs, 'course_id' => $id]);
+    }
+
+    /**
      * GET /api/v1/practical-submissions/{id}  (instructor)
      */
     public function submission(string $id): JsonResponse
