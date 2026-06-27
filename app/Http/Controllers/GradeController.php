@@ -6,8 +6,11 @@ use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use App\Models\AssignmentSubmission;
 use App\Models\Course;
 use App\Models\GradeItem;
+use App\Models\PracticalSubmission;
+use App\Models\QuizAttempt;
 use App\Models\StudentGrade;
 use App\Models\User;
 use App\Services\GradeService;
@@ -151,5 +154,133 @@ class GradeController extends Controller
             ]);
 
         return response()->json(['data' => $grades, 'course_id' => $id]);
+    }
+
+    /**
+     * GET /api/v1/my-gradebook
+     * Aggregate the authenticated student's grades across EVERY gradable task type
+     * (quizzes, assignments, practicals, interactive H5P/SCORM) and every course,
+     * including auto-submitted attempts (timeout/violation). Read-only union built
+     * from each type's own store — no single table covers all of them.
+     */
+    public function myGradebook(Request $request): JsonResponse
+    {
+        $uid = $request->user()->id;
+
+        $pct = function ($grade, $max): ?float {
+            if ($grade === null || $max === null || (float) $max <= 0) {
+                return null;
+            }
+            return round((float) $grade / (float) $max * 100, 1);
+        };
+
+        $rows = [];
+
+        // 1) Quizzes — quiz_attempts (score / max_score, auto_submitted)
+        QuizAttempt::where('student_id', $uid)
+            ->with(['activity:id,name', 'course:id,name'])
+            ->get()
+            ->each(function ($a) use (&$rows, $pct) {
+                $rows[] = [
+                    'id'             => 'quiz-' . $a->id,
+                    'course_id'      => $a->course_id,
+                    'course_name'    => $a->course?->name ?? 'Unknown course',
+                    'activity_id'    => $a->activity_id,
+                    'activity_name'  => $a->activity?->name ?? 'Quiz',
+                    'type'           => 'quiz',
+                    'grade'          => $a->score !== null ? (float) $a->score : null,
+                    'grade_max'      => $a->max_score !== null ? (float) $a->max_score : null,
+                    'percentage'     => $pct($a->score, $a->max_score),
+                    'status'         => $a->status,
+                    'submitted_at'   => $a->submitted_at,
+                    'auto_submitted' => (bool) ($a->auto_submitted ?? false),
+                    'late'           => false,
+                    'graded'         => $a->score !== null,
+                    'feedback'       => $a->feedback,
+                ];
+            });
+
+        // 2) Assignments — assignment_submissions (grade, max from activity, late)
+        AssignmentSubmission::where('student_id', $uid)
+            ->with(['activity:id,name,grade_max', 'course:id,name'])
+            ->get()
+            ->each(function ($s) use (&$rows, $pct) {
+                $max = $s->activity?->grade_max;
+                $rows[] = [
+                    'id'             => 'assignment-' . $s->id,
+                    'course_id'      => $s->course_id,
+                    'course_name'    => $s->course?->name ?? 'Unknown course',
+                    'activity_id'    => $s->activity_id,
+                    'activity_name'  => $s->activity?->name ?? 'Assignment',
+                    'type'           => 'assignment',
+                    'grade'          => $s->grade !== null ? (float) $s->grade : null,
+                    'grade_max'      => $max !== null ? (float) $max : null,
+                    'percentage'     => $pct($s->grade, $max),
+                    'status'         => $s->status,
+                    'submitted_at'   => $s->submitted_at,
+                    'auto_submitted' => false,
+                    'late'           => (bool) ($s->late ?? false),
+                    'graded'         => $s->grade !== null,
+                    'feedback'       => $s->feedback,
+                ];
+            });
+
+        // 3) Practicals — practical_submissions (grade, max from activity, auto_submitted)
+        PracticalSubmission::where('student_id', $uid)
+            ->with(['activity:id,name,grade_max', 'course:id,name'])
+            ->get()
+            ->each(function ($s) use (&$rows, $pct) {
+                $max = $s->activity?->grade_max;
+                $rows[] = [
+                    'id'             => 'practical-' . $s->id,
+                    'course_id'      => $s->course_id,
+                    'course_name'    => $s->course?->name ?? 'Unknown course',
+                    'activity_id'    => $s->activity_id,
+                    'activity_name'  => $s->activity?->name ?? 'Practical',
+                    'type'           => 'practical',
+                    'grade'          => $s->grade !== null ? (float) $s->grade : null,
+                    'grade_max'      => $max !== null ? (float) $max : null,
+                    'percentage'     => $pct($s->grade, $max),
+                    'status'         => $s->grade !== null ? 'graded' : $s->status,
+                    'submitted_at'   => $s->submitted_at,
+                    'auto_submitted' => (bool) ($s->auto_submitted ?? false),
+                    'late'           => false,
+                    'graded'         => $s->grade !== null,
+                    'feedback'       => $s->feedback,
+                ];
+            });
+
+        // 4) Interactive content — student_grades for H5P/SCORM grade items only
+        //    (practical/quiz/assignment items are covered above; excluded here to
+        //    avoid double-counting since they also write a student_grades row).
+        StudentGrade::where('student_id', $uid)
+            ->whereHas('gradeItem', fn ($q) => $q->whereIn('activity_type', ['h5p', 'scorm']))
+            ->with(['gradeItem.course:id,name'])
+            ->get()
+            ->each(function ($sg) use (&$rows) {
+                $gi = $sg->gradeItem;
+                $rows[] = [
+                    'id'             => 'interactive-' . $sg->id,
+                    'course_id'      => $gi?->course_id,
+                    'course_name'    => $gi?->course?->name ?? 'Unknown course',
+                    'activity_id'    => $gi?->activity_id,
+                    'activity_name'  => $gi?->activity_name ?? 'Interactive activity',
+                    'type'           => 'interactive',
+                    'grade'          => $sg->grade !== null ? (float) $sg->grade : null,
+                    'grade_max'      => $gi?->grade_max !== null ? (float) $gi->grade_max : null,
+                    'percentage'     => $sg->percentage !== null ? (float) $sg->percentage : null,
+                    'status'         => $sg->status,
+                    'submitted_at'   => $sg->submitted_date,
+                    'auto_submitted' => false,
+                    'late'           => false,
+                    'graded'         => $sg->grade !== null,
+                    'feedback'       => $sg->feedback,
+                ];
+            });
+
+        // Newest first across all types.
+        usort($rows, fn ($a, $b) => strcmp((string) $b['submitted_at'], (string) $a['submitted_at']));
+
+        return response()->json(['data' => array_values($rows)]);
     }
 }

@@ -594,6 +594,9 @@ Route::middleware('auth:sanctum')->get('my-group-works', [AssignmentController::
 Route::middleware('auth:sanctum')->get('submissions/{id}', [AssignmentController::class, 'show']);
 Route::middleware('auth:sanctum')->put('submissions/{id}/grade', [AssignmentController::class, 'grade']);
 
+// Grade book — authenticated student's grades across all task types & courses
+Route::middleware('auth:sanctum')->get('my-gradebook', [GradeController::class, 'myGradebook']);
+
 // Quiz attempts
 Route::middleware('auth:sanctum')->get('quiz-attempts/{id}',               [QuizController::class, 'getAttempt']);
 Route::middleware('auth:sanctum')->post('quiz-attempts/{id}/submit',      [QuizController::class, 'submitAttempt']);

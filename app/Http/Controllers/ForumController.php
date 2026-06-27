@@ -10,6 +10,7 @@ use App\Models\Activity;
 use App\Models\ForumDiscussion;
 use App\Models\ForumPost;
 use App\Models\ForumPostReaction;
+use App\Models\User;
 use App\Services\EngagementComputationService;
 use Illuminate\Support\Facades\Log;
 
@@ -289,6 +290,9 @@ class ForumController extends Controller
             'discussion_id' => $discussion->id,
             'title'         => $activity->name,
             'content'       => $topicPost?->content ?? ($activity->description ?? ''),
+            'topic_author'  => $topicPost?->user
+                ? ['id' => $topicPost->user->id, 'name' => $topicPost->user->name, 'avatar' => $this->avatarUrl($topicPost->user)]
+                : null,
             'options'       => [
                 'anonymous_mode'       => $this->anonymousMode($discussion),
                 'disallow_threaded'    => (bool) ($settings['disallow_threaded'] ?? false),
@@ -381,8 +385,17 @@ class ForumController extends Controller
             'anonymous'      => $anonymous,
             'author'         => $anonymous
                 ? ['id' => null, 'name' => 'Anonymous', 'avatar' => null]
-                : ['id' => $post->user?->id, 'name' => $post->user?->name, 'avatar' => $post->user?->profile_image ?? null],
+                : ['id' => $post->user?->id, 'name' => $post->user?->name, 'avatar' => $this->avatarUrl($post->user)],
             'is_mine'        => $userId !== null && $post->user_id === $userId,
         ];
+    }
+
+    /**
+     * Build a full, browser-usable URL for a user's profile picture (stored as a
+     * relative path), matching the convention used elsewhere (AuthController, etc.).
+     */
+    private function avatarUrl(?User $user): ?string
+    {
+        return $user?->profile_image ? url('storage/' . $user->profile_image) : null;
     }
 }
