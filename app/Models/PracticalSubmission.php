@@ -33,6 +33,11 @@ class PracticalSubmission extends Model
         return $this->belongsTo(Activity::class);
     }
 
+    public function course(): BelongsTo
+    {
+        return $this->belongsTo(Course::class);
+    }
+
     public function student(): BelongsTo
     {
         return $this->belongsTo(User::class, 'student_id');

@@ -13,6 +13,7 @@ use App\Models\ProctoringSession;
 use App\Models\ProctoringViolation;
 use App\Models\QuizAttempt;
 use App\Services\ActivityResultService;
+use Illuminate\Support\Str;
 use App\Services\GeminiService;
 use Smalot\PdfParser\Parser as PdfParser;
 
@@ -348,16 +349,24 @@ class ProctoringController extends Controller
                 }
             } elseif ($session->context_type === 'practical') {
                 // Server-side safety net: finalize the student's current code as a
-                // submission even if the browser is closed/compromised.
-                $sub = PracticalSubmission::where('activity_id', $session->activity_id)
-                    ->where('student_id', $session->student_id)
-                    ->first();
-                if ($sub && $sub->status !== 'submitted') {
-                    $sub->update([
-                        'status'         => 'submitted',
-                        'submitted_at'   => now(),
-                        'auto_submitted' => true,
-                    ]);
+                // submission even if the browser is closed/compromised. Create the
+                // row when none exists yet (untimed practical whose autosave never
+                // fired) so a violation auto-submit is never lost.
+                $sub = PracticalSubmission::firstOrNew([
+                    'activity_id' => $session->activity_id,
+                    'student_id'  => $session->student_id,
+                ]);
+                if (! $sub->exists) {
+                    $sub->id         = (string) Str::uuid();
+                    $sub->course_id  = $session->course_id;
+                    $sub->files      = ['html' => '', 'css' => '', 'js' => ''];
+                    $sub->started_at = $sub->started_at ?? now();
+                }
+                if ($sub->status !== 'submitted') {
+                    $sub->status         = 'submitted';
+                    $sub->submitted_at   = now();
+                    $sub->auto_submitted = true;
+                    $sub->save();
                     $activity = Activity::find($session->activity_id);
                     if ($activity) {
                         app(ActivityResultService::class)->recordCompletion($activity, $session->student_id);
