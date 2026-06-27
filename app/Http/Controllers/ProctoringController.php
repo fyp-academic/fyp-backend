@@ -7,9 +7,12 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
+use App\Models\Activity;
+use App\Models\PracticalSubmission;
 use App\Models\ProctoringSession;
 use App\Models\ProctoringViolation;
 use App\Models\QuizAttempt;
+use App\Services\ActivityResultService;
 use App\Services\GeminiService;
 use Smalot\PdfParser\Parser as PdfParser;
 
@@ -27,7 +30,7 @@ class ProctoringController extends Controller
         $request->validate([
             'activity_id'           => 'required|string',
             'course_id'             => 'nullable|string',
-            'context_type'          => 'sometimes|string|in:quiz,assignment',
+            'context_type'          => 'sometimes|string|in:quiz,assignment,practical',
             'quiz_attempt_id'       => 'nullable|string',
             'auto_submit_threshold' => 'sometimes|integer|min:1|max:20',
         ]);
@@ -333,16 +336,34 @@ class ProctoringController extends Controller
     // ─────────────────────────────────────────────────────────────────────
     private function forceSubmitAttempt(ProctoringSession $session): void
     {
-        if ($session->context_type !== 'quiz' || !$session->quiz_attempt_id) return;
-
         try {
-            $attempt = QuizAttempt::find($session->quiz_attempt_id);
-            if ($attempt && $attempt->status === 'in_progress') {
-                $attempt->update([
-                    'status'       => 'submitted',
-                    'submitted_at' => now(),
-                ]);
-                Log::info('Proctoring: force-submitted quiz attempt', ['attempt_id' => $attempt->id]);
+            if ($session->context_type === 'quiz' && $session->quiz_attempt_id) {
+                $attempt = QuizAttempt::find($session->quiz_attempt_id);
+                if ($attempt && $attempt->status === 'in_progress') {
+                    $attempt->update([
+                        'status'       => 'submitted',
+                        'submitted_at' => now(),
+                    ]);
+                    Log::info('Proctoring: force-submitted quiz attempt', ['attempt_id' => $attempt->id]);
+                }
+            } elseif ($session->context_type === 'practical') {
+                // Server-side safety net: finalize the student's current code as a
+                // submission even if the browser is closed/compromised.
+                $sub = PracticalSubmission::where('activity_id', $session->activity_id)
+                    ->where('student_id', $session->student_id)
+                    ->first();
+                if ($sub && $sub->status !== 'submitted') {
+                    $sub->update([
+                        'status'         => 'submitted',
+                        'submitted_at'   => now(),
+                        'auto_submitted' => true,
+                    ]);
+                    $activity = Activity::find($session->activity_id);
+                    if ($activity) {
+                        app(ActivityResultService::class)->recordCompletion($activity, $session->student_id);
+                    }
+                    Log::info('Proctoring: force-submitted practical', ['submission_id' => $sub->id]);
+                }
             }
         } catch (\Throwable $e) {
             Log::warning('Proctoring: failed to force-submit attempt', ['error' => $e->getMessage()]);
