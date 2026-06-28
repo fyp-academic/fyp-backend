@@ -302,6 +302,9 @@ class ProctoringController extends Controller
             'is_flagged'      => $session->is_flagged,
             'started_at'      => $session->started_at,
             'ended_at'        => $session->ended_at,
+            'duration_seconds' => $session->started_at && $session->ended_at
+                ? $session->started_at->diffInSeconds($session->ended_at)
+                : null,
             'violations'      => $session->violations->map(fn ($v) => [
                 'id'                    => $v->id,
                 'type'                  => $v->type,
