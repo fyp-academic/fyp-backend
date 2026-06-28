@@ -603,7 +603,7 @@ Route::middleware('auth:sanctum')->post('quiz-attempts/{id}/submit',      [QuizC
 Route::middleware('auth:sanctum')->get('my-quiz-attempts',                 [QuizController::class, 'myAttempts']);
 
 // Essay grading (instructor)
-Route::middleware('auth:sanctum')->middleware('admin.or.instructor')->put('quiz-attempt-responses/{id}/grade', [QuizController::class, 'gradeEssayResponse']);
+Route::middleware(['auth:sanctum', 'admin.or.instructor'])->put('quiz-attempt-responses/{id}/grade', [QuizController::class, 'gradeEssayResponse']);
 
 // Proctoring
 Route::middleware('auth:sanctum')->prefix('proctoring')->group(function () {
@@ -659,7 +659,7 @@ Route::middleware('auth:sanctum')->get('activities/{id}/practical-submission',  
 Route::middleware('auth:sanctum')->post('activities/{id}/practical-submission', [PracticalController::class, 'save']);
 
 // Practical Problem — instructor review & grading
-Route::middleware('auth:sanctum')->middleware('admin.or.instructor')->group(function () {
+Route::middleware(['auth:sanctum', 'admin.or.instructor'])->group(function () {
     Route::get('activities/{id}/practical-submissions', [PracticalController::class, 'submissions']);
     Route::get('courses/{id}/practical-submissions',    [PracticalController::class, 'courseSubmissions']);
     Route::get('practical-submissions/{id}',            [PracticalController::class, 'submission']);
