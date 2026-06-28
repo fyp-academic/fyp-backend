@@ -10,6 +10,7 @@ use App\Models\Course;
 use App\Models\Enrollment;
 use App\Models\EngagementScore;
 use App\Models\LearnerActivityEvent;
+use App\Models\MaterialInteraction;
 use App\Models\LearnerLoginSession;
 use App\Models\LearningStreak;
 use App\Models\User;
@@ -131,12 +132,27 @@ class InstructorEngagementController extends Controller
             ];
         });
 
+        $count = $learners->count();
+
+        // Real active time-on-task across the class (last 30d): heartbeat seconds + material time.
+        $since = now()->subDays(30);
+        $activeSeconds = (float) LearnerActivityEvent::where('course_id', $courseId)
+                ->where('event_type', 'heartbeat')
+                ->where('occurred_at', '>=', $since)
+                ->sum('value')
+            + (float) MaterialInteraction::where('course_id', $courseId)
+                ->where('last_interaction_at', '>=', $since)
+                ->sum('total_duration_seconds');
+
         $summary = [
-            'total'       => $learners->count(),
-            'engaged'     => $learners->where('risk_level', 'engaged')->count(),
-            'at_risk'     => $learners->where('risk_level', 'at_risk')->count(),
-            'disengaged'  => $learners->where('risk_level', 'disengaged')->count(),
-            'avg_score'   => $learners->count() ? round($learners->avg('engagement_score'), 1) : 0,
+            'total'              => $count,
+            'engaged'            => $learners->where('risk_level', 'engaged')->count(),
+            'at_risk'            => $learners->where('risk_level', 'at_risk')->count(),
+            'disengaged'         => $learners->where('risk_level', 'disengaged')->count(),
+            'avg_score'          => $count ? round($learners->avg('engagement_score'), 1) : 0,
+            // Average measured active minutes per learner, and average signal coverage (0-1).
+            'avg_active_minutes' => $count ? round(($activeSeconds / 60) / $count, 1) : 0,
+            'coverage'           => $count ? round($learners->avg(fn($l) => $l['confidence']['confidence'] ?? 0), 2) : 0,
         ];
 
         return response()->json([

@@ -71,7 +71,9 @@ class EngagementController extends Controller
     {
         $session = $this->service->openLoginSession(
             $request->user()->id,
-            $request->input('device_type', 'desktop')
+            $request->input('device_type', 'desktop'),
+            $request->ip(),
+            $request->userAgent()
         );
 
         return response()->json(['message' => 'Session opened.', 'session_id' => $session->id], 201);

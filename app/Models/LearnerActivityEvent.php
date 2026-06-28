@@ -35,7 +35,7 @@ class LearnerActivityEvent extends Model
     protected $fillable = [
         'id', 'user_id', 'course_id', 'login_session_id',
         'event_type', 'resource_type', 'resource_id',
-        'value', 'metadata', 'device_type', 'occurred_at',
+        'value', 'metadata', 'device_type', 'ip_address', 'occurred_at',
     ];
 
     protected function casts(): array

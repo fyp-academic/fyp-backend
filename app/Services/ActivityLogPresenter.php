@@ -121,7 +121,8 @@ class ActivityLogPresenter
                 'context'     => $context,
                 'description' => $this->buildDescription($e, $userName, $verb, $resolved),
                 'origin'      => $session ? ($e->device_type === 'desktop' ? 'web' : 'mobile') : 'system',
-                'ip_address'  => $session?->ip_address,
+                // Prefer the IP captured directly on the event; fall back to the session.
+                'ip_address'  => $e->ip_address ?? $session?->ip_address,
                 'device_type' => $e->device_type,
                 'browser'     => $session?->browser,
                 'os'          => $session?->os,
@@ -134,8 +135,16 @@ class ActivityLogPresenter
     /** Build the Moodle "Event context" string, e.g. "Quiz: Midterm Exam". */
     private function buildContext(LearnerActivityEvent $e, ?array $resolved): string
     {
-        if (in_array($e->event_type, self::CONTEXTLESS, true) || !$resolved) {
-            return in_array($e->event_type, self::CONTEXTLESS, true) ? 'System' : '—';
+        if (in_array($e->event_type, self::CONTEXTLESS, true)) {
+            return 'System';
+        }
+
+        // Resource couldn't be resolved (null/deleted resource_id). Fall back to a
+        // sensible label from the resource_type instead of a bare dash.
+        if (!$resolved) {
+            return $e->resource_type
+                ? (self::CONTEXT_LABEL[$e->resource_type] ?? Str::title(str_replace('_', ' ', $e->resource_type)))
+                : 'System';
         }
 
         // Activities expose their module type (quiz/assignment/lesson…) for a precise label.

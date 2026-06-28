@@ -646,7 +646,8 @@ class EngagementComputationService
         ?float  $value         = null,
         array   $metadata      = [],
         string  $deviceType    = 'desktop',
-        ?string $loginSessionId = null
+        ?string $loginSessionId = null,
+        ?string $ipAddress     = null
     ): LearnerActivityEvent {
         $event = LearnerActivityEvent::create([
             'id'               => Str::uuid()->toString(),
@@ -659,6 +660,8 @@ class EngagementComputationService
             'value'            => $value,
             'metadata'         => $metadata ?: null,
             'device_type'      => $deviceType,
+            // Authoritative client IP captured server-side (callers run in HTTP context).
+            'ip_address'       => $ipAddress ?? request()->ip(),
             'occurred_at'      => now(),
         ]);
 
