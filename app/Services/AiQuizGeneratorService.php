@@ -114,6 +114,11 @@ class AiQuizGeneratorService
             ]);
         }
 
+        // Register the quiz in the course gradebook immediately so it appears as a
+        // column in the instructor Grades tab (student grades fill in on submit via
+        // ActivityResultService::recordScore).
+        app(GradeService::class)->gradeItemForActivity($activity, $gradeMax > 0 ? $gradeMax : null);
+
         foreach ($questions as $index => $q) {
             $type = in_array($q['type'] ?? '', self::ALLOWED_TYPES, true)
                 ? $q['type']
