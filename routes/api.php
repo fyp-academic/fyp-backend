@@ -41,6 +41,7 @@ use App\Http\Controllers\EngagementController;
 use App\Http\Controllers\AiQuizController;
 use App\Http\Controllers\InstructorAdaptationController;
 use App\Http\Controllers\InstructorEngagementController;
+use App\Http\Controllers\CourseLogController;
 use App\Http\Controllers\Student\AdaptiveContentController;
 use App\Http\Controllers\Student\PersonalizationController;
 use App\Http\Controllers\GroupController;
@@ -783,6 +784,12 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
             Route::prefix('learners/{userId}')->group(function () {
                 Route::get('engagement',     [InstructorEngagementController::class, 'learnerDetail']);
                 Route::post('nudge',         [InstructorEngagementController::class, 'nudgeLearner']);
+            });
+
+            // Moodle-style course activity log (student events)
+            Route::middleware('admin.or.instructor')->group(function () {
+                Route::get('logs',        [CourseLogController::class, 'index']);
+                Route::get('logs/export', [CourseLogController::class, 'export']);
             });
         });
     });

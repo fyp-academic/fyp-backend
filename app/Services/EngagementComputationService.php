@@ -29,9 +29,14 @@ class EngagementComputationService
     private const W_LIVE    = 0.10;
 
     // ── Thresholds ────────────────────────────────────────────────────────
-    private const BOUNCE_SECONDS    = 120;   // < 2 min = bounce session
-    private const FAILURE_THRESHOLD = 50.0;  // score below this is a "failure"
-    private const IDEAL_WEEK_DAYS   = 7;
+    // Bounce + failure thresholds now live in config/engagement.php so they are
+    // tunable without code changes. IDEAL_WEEK_DAYS is a fixed normalisation base.
+    private const IDEAL_WEEK_DAYS = 7;
+
+    private function failurePct(): float
+    {
+        return (float) config('engagement.failure_pct', 50);
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // MAIN ENTRY POINT
@@ -43,6 +48,10 @@ class EngagementComputationService
      */
     public function computeForWeek(string $learnerId, string $courseId, int $weekNumber): EngagementScore
     {
+        // Each component returns a 0-100 score, or null when the signal is
+        // "not applicable" for this learner-week (no forum in the course, no
+        // live session scheduled). Null signals are excluded from the score
+        // instead of being filled with a misleading default.
         $L = $this->computeLoginConsistency($learnerId, $courseId, $weekNumber);
         $C = $this->computeContentCompletion($learnerId, $courseId, $weekNumber);
         $A = $this->computeAssessmentActivity($learnerId, $courseId, $weekNumber);
@@ -50,7 +59,8 @@ class EngagementComputationService
         $P = $this->computePacingScore($learnerId, $courseId, $weekNumber);
         $S = $this->computeLiveSessionScore($learnerId, $courseId, $weekNumber);
 
-        $finalScore = EngagementScore::computeFromComponents($L, $C, $A, $F, $P, $S);
+        // Renormalise weights over only the measured signals.
+        [$finalScore, $meta] = EngagementScore::weightedScore(compact('L', 'C', 'A', 'F', 'P', 'S'));
 
         $prev = EngagementScore::where('learner_id', $learnerId)
             ->where('course_id', $courseId)
@@ -63,16 +73,18 @@ class EngagementComputationService
             ['learner_id' => $learnerId, 'course_id' => $courseId, 'week_number' => $weekNumber],
             [
                 'id'                        => Str::uuid()->toString(),
-                'login_consistency_score'   => $L,
-                'content_completion_score'  => $C,
-                'assessment_activity_score' => $A,
-                'forum_participation_score' => $F,
-                'pacing_score'              => $P,
-                'live_session_score'        => $S,
+                // Absent signals store 0 in their (non-null) column but are flagged
+                // as 'absent' in component_breakdown so the UI shows N/A, not 0.
+                'login_consistency_score'   => $L ?? 0,
+                'content_completion_score'  => $C ?? 0,
+                'assessment_activity_score' => $A ?? 0,
+                'forum_participation_score' => $F ?? 0,
+                'pacing_score'              => $P ?? 0,
+                'live_session_score'        => $S ?? 0,
                 'engagement_score'          => $finalScore,
                 'previous_week_score'       => $prev,
                 'score_delta'               => $delta,
-                'component_breakdown'       => compact('L', 'C', 'A', 'F', 'P', 'S'),
+                'component_breakdown'       => $meta,
                 'computed_at'               => now(),
             ]
         );
@@ -207,8 +219,14 @@ class EngagementComputationService
      *   + 0.30 × peer_response_rate
      *   + 0.20 × normalize(discussion_depth_score)
      */
-    private function computeForumParticipation(string $learnerId, string $courseId, int $weekNumber): float
+    private function computeForumParticipation(string $learnerId, string $courseId, int $weekNumber): ?float
     {
+        // Not applicable when the course has no forum at all — return null so the
+        // signal is excluded from the score rather than penalised with a default.
+        if (!\App\Models\ForumDiscussion::where('course_id', $courseId)->exists()) {
+            return null;
+        }
+
         $bSig = BehavioralSignal::where('learner_id', $learnerId)
             ->where('course_id', $courseId)
             ->where('week_number', $weekNumber)
@@ -224,10 +242,13 @@ class EngagementComputationService
         $posted   = $bSig ? ($bSig->forum_post_count ?? 0) : 0;
 
         [$start, $end] = $this->weekBounds($courseId, $weekNumber);
+        // Use real AI quality scores when available. When posts exist but aren't
+        // scored yet we count the participation at face value (quality = 1.0)
+        // rather than fabricating a 0.5 penalty.
         $avgQuality = \App\Models\ForumPost::where('user_id', $learnerId)
             ->whereBetween('created_at', [$start, $end])
             ->whereNotNull('quality_score')
-            ->avg('quality_score') ?? 0.5; // default 0.5 if no AI scoring yet
+            ->avg('quality_score') ?? 1.0;
 
         $qualityRatio = min(($posted * $avgQuality) / $required, 1);
 
@@ -280,7 +301,7 @@ class EngagementComputationService
      *   + 0.20 × poll response rate
      *   + 0.10 × active participation (mic/camera/hands/chat)
      */
-    private function computeLiveSessionScore(string $learnerId, string $courseId, int $weekNumber): float
+    private function computeLiveSessionScore(string $learnerId, string $courseId, int $weekNumber): ?float
     {
         [$start, $end] = $this->weekBounds($courseId, $weekNumber);
 
@@ -289,7 +310,9 @@ class EngagementComputationService
             ->pluck('id');
 
         if ($scheduledSessions->isEmpty()) {
-            return 100.0; // no sessions scheduled — neutral (does not penalise)
+            // No session scheduled this week — not applicable. Return null so the
+            // signal is excluded (previously returned a misleading neutral 100).
+            return null;
         }
 
         $participants = SessionParticipant::where('user_id', $learnerId)
@@ -443,7 +466,7 @@ class EngagementComputationService
         foreach ($attempts as $attempt) {
             if ($attempt->max_score > 0) {
                 $pct = ($attempt->score / $attempt->max_score) * 100;
-                if ($pct < self::FAILURE_THRESHOLD) {
+                if ($pct < $this->failurePct()) {
                     $frustrationEvents++;
                 }
             }
@@ -464,7 +487,7 @@ class EngagementComputationService
             ->where('course_id', $courseId)
             ->whereBetween('submitted_at', [$start, $end])
             ->get(['score', 'max_score', 'submitted_at'])
-            ->filter(fn($a) => $a->max_score > 0 && ($a->score / $a->max_score * 100) < self::FAILURE_THRESHOLD)
+            ->filter(fn($a) => $a->max_score > 0 && ($a->score / $a->max_score * 100) < $this->failurePct())
             ->sortBy('submitted_at')
             ->first();
 
@@ -507,6 +530,104 @@ class EngagementComputationService
         $end   = $start->copy()->addDays(6)->endOfDay();
 
         return [$start, $end];
+    }
+
+    /**
+     * The current week number for a course (Week 1 = course created_at).
+     */
+    public function currentWeek(string $courseId): int
+    {
+        $course = \App\Models\Course::find($courseId);
+        $base   = $course ? Carbon::parse($course->created_at) : Carbon::now()->startOfYear();
+
+        return max(1, (int) floor($base->diffInWeeks(now())) + 1);
+    }
+
+    /**
+     * Real active time-on-task for a learner in a course, derived from measured
+     * telemetry — NOT estimated. Sums heartbeat `active_seconds` events and
+     * material interaction durations, grouped per resource.
+     *
+     * @return array{total_seconds: int, by_resource: array<int, array{resource_type: ?string, resource_id: ?string, seconds: int}>}
+     */
+    public function timeOnTask(string $learnerId, string $courseId, ?int $sinceDays = 30): array
+    {
+        $since = $sinceDays ? now()->subDays($sinceDays) : Carbon::create(2000);
+
+        // Heartbeat events carry accumulated active seconds in `value`.
+        $heartbeats = LearnerActivityEvent::where('user_id', $learnerId)
+            ->where('course_id', $courseId)
+            ->where('event_type', 'heartbeat')
+            ->where('occurred_at', '>=', $since)
+            ->get(['resource_type', 'resource_id', 'value']);
+
+        $byResource = [];
+        foreach ($heartbeats as $hb) {
+            $key = ($hb->resource_type ?? 'page') . ':' . ($hb->resource_id ?? '');
+            if (!isset($byResource[$key])) {
+                $byResource[$key] = [
+                    'resource_type' => $hb->resource_type,
+                    'resource_id'   => $hb->resource_id,
+                    'seconds'       => 0,
+                ];
+            }
+            $byResource[$key]['seconds'] += (int) round($hb->value ?? 0);
+        }
+
+        // Material interactions track their own accumulated duration.
+        $materials = MaterialInteraction::where('student_id', $learnerId)
+            ->where('course_id', $courseId)
+            ->where('last_interaction_at', '>=', $since)
+            ->get(['material_id', 'total_duration_seconds']);
+
+        foreach ($materials as $m) {
+            $key = 'material:' . $m->material_id;
+            if (!isset($byResource[$key])) {
+                $byResource[$key] = [
+                    'resource_type' => 'material',
+                    'resource_id'   => $m->material_id,
+                    'seconds'       => 0,
+                ];
+            }
+            $byResource[$key]['seconds'] += (int) $m->total_duration_seconds;
+        }
+
+        $total = array_sum(array_column($byResource, 'seconds'));
+
+        return [
+            'total_seconds' => $total,
+            'by_resource'   => array_values($byResource),
+        ];
+    }
+
+    /**
+     * Defensively close login sessions left open (no ended_at) beyond the
+     * configured staleness window — abandoned tabs that never sent a
+     * close/beacon. Caps duration at the last heartbeat where possible.
+     *
+     * @return int number of sessions closed
+     */
+    public function closeStaleSessions(): int
+    {
+        $minutes = (int) config('engagement.stale_session_minutes', 30);
+        $cutoff  = now()->subMinutes($minutes);
+
+        $stale = LearnerLoginSession::whereNull('ended_at')
+            ->where('started_at', '<', $cutoff)
+            ->get();
+
+        $closed = 0;
+        foreach ($stale as $session) {
+            // Prefer the last heartbeat/event in this session as the real end.
+            $lastEvent = LearnerActivityEvent::where('login_session_id', $session->id)
+                ->orderByDesc('occurred_at')
+                ->value('occurred_at');
+
+            $session->close($lastEvent ?: $session->started_at); // sets duration_seconds / is_bounce
+            $closed++;
+        }
+
+        return $closed;
     }
 
     // ─────────────────────────────────────────────────────────────────────

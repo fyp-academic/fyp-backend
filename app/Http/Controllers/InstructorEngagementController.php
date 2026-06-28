@@ -20,6 +20,7 @@ use App\Models\Section;
 use App\Models\Activity;
 use App\Models\UserActivityCompletion;
 use App\Services\EngagementRecommendationService;
+use App\Services\EngagementComputationService;
 use App\Services\NotificationService;
 use App\Services\GeminiService;
 
@@ -27,9 +28,54 @@ class InstructorEngagementController extends Controller
 {
     public function __construct(
         private EngagementRecommendationService $recommender,
+        private EngagementComputationService $engagement,
         private NotificationService $notificationService,
         private GeminiService $gemini,
     ) {}
+
+    // ─────────────────────────────────────────────────────────────────────
+    // SHARED HELPERS — component scores are stored 0-100; absent signals are
+    // flagged in component_breakdown so the UI shows N/A instead of a fake 0.
+    // ─────────────────────────────────────────────────────────────────────
+
+    private function riskLevel(float $score): string
+    {
+        return match (true) {
+            $score >= (float) config('engagement.risk_engaged', 70) => 'engaged',
+            $score >= (float) config('engagement.risk_at_risk', 40) => 'at_risk',
+            default                                                 => 'disengaged',
+        };
+    }
+
+    /** Per-signal 0-100 breakdown, with absent (not-applicable) signals as null. */
+    private function scoreBreakdown(?EngagementScore $score): array
+    {
+        $absent = $score?->component_breakdown['absent'] ?? [];
+        $val = fn(string $label, ?float $raw) => in_array($label, $absent, true) ? null : round($raw ?? 0, 1);
+
+        return [
+            'login_consistency'   => $val('login_consistency',   $score?->login_consistency_score),
+            'content_completion'  => $val('content_completion',  $score?->content_completion_score),
+            'assessment_activity' => $val('assessment_activity', $score?->assessment_activity_score),
+            'forum_participation' => $val('forum_participation', $score?->forum_participation_score),
+            'pacing'              => $val('pacing',              $score?->pacing_score),
+            'live_session'        => $val('live_session',        $score?->live_session_score),
+        ];
+    }
+
+    /** Measured-vs-assumed confidence summary for an engagement score. */
+    private function confidence(?EngagementScore $score): array
+    {
+        $b = $score?->component_breakdown ?? [];
+        $measured = $b['measured'] ?? [];
+
+        return [
+            'measured'   => $measured,
+            'absent'     => $b['absent'] ?? [],
+            'confidence' => $b['confidence'] ?? 0,
+            'label'      => count($measured) . '/6 signals',
+        ];
+    }
 
     // ─────────────────────────────────────────────────────────────────────
     // COURSE OVERVIEW
@@ -68,31 +114,20 @@ class InstructorEngagementController extends Controller
                 ? (int) Carbon::parse($lastLogin->started_at)->diffInDays(now())
                 : null;
 
-            $riskLevel = match (true) {
-                $finalScore >= 70 => 'engaged',
-                $finalScore >= 40 => 'at_risk',
-                default           => 'disengaged',
-            };
-
             return [
                 'user_id'         => $userId,
                 'name'            => $enrollment->user?->name,
                 'email'           => $enrollment->user?->email,
                 'profile_image'   => $enrollment->user?->profile_image,
                 'engagement_score'=> $finalScore,
-                'risk_level'      => $riskLevel,
+                'has_data'        => $latestScore !== null,
+                'risk_level'      => $this->riskLevel($finalScore),
                 'streak'          => $streak?->current_streak_days ?? 0,
                 'last_login'      => $lastLogin?->started_at,
                 'inactive_days'   => $inactiveDays,
                 'week_number'     => $latestScore?->week_number,
-                'score_breakdown' => [
-                    'login_consistency'  => round(($latestScore?->login_consistency_score  ?? 0) * 100, 1),
-                    'content_completion' => round(($latestScore?->content_completion_score ?? 0) * 100, 1),
-                    'assessment_activity'=> round(($latestScore?->assessment_activity_score?? 0) * 100, 1),
-                    'forum_participation'=> round(($latestScore?->forum_participation_score ?? 0) * 100, 1),
-                    'pacing'             => round(($latestScore?->pacing_score             ?? 0) * 100, 1),
-                    'live_session'       => round(($latestScore?->live_session_score        ?? 0) * 100, 1),
-                ],
+                'score_breakdown' => $this->scoreBreakdown($latestScore),
+                'confidence'      => $this->confidence($latestScore),
             ];
         });
 
@@ -143,11 +178,7 @@ class InstructorEngagementController extends Controller
                 ? (int) Carbon::parse($lastLogin->started_at)->diffInDays(now())
                 : null;
 
-            $riskLevel = match (true) {
-                $finalScore >= 70 => 'engaged',
-                $finalScore >= 40 => 'at_risk',
-                default           => 'disengaged',
-            };
+            $riskLevel = $this->riskLevel($finalScore);
 
             if ($riskLevel === 'engaged') return null;
 
@@ -159,9 +190,12 @@ class InstructorEngagementController extends Controller
                 'email'           => $enrollment->user?->email,
                 'profile_image'   => $enrollment->user?->profile_image,
                 'engagement_score'=> $finalScore,
+                'has_data'        => $latestScore !== null,
                 'risk_level'      => $riskLevel,
                 'inactive_days'   => $inactiveDays,
                 'last_login'      => $lastLogin?->started_at,
+                'score_breakdown' => $this->scoreBreakdown($latestScore),
+                'confidence'      => $this->confidence($latestScore),
                 'interventions'   => $interventions,
                 'reasons'         => $this->buildRiskReasons($latestScore, $inactiveDays),
             ];
@@ -215,11 +249,7 @@ class InstructorEngagementController extends Controller
             ? (int) Carbon::parse($lastLogin->started_at)->diffInDays(now())
             : null;
 
-        $riskLevel = match (true) {
-            $finalScore >= 70 => 'engaged',
-            $finalScore >= 40 => 'at_risk',
-            default           => 'disengaged',
-        };
+        $riskLevel = $this->riskLevel($finalScore);
 
         // Device breakdown
         $deviceBreakdown = LearnerLoginSession::where('user_id', $userId)
@@ -227,6 +257,9 @@ class InstructorEngagementController extends Controller
             ->selectRaw('device_type, COUNT(*) as count')
             ->groupBy('device_type')
             ->pluck('count', 'device_type');
+
+        // Real active time-on-task (measured from heartbeats + material interactions)
+        $timeOnTask = $this->engagement->timeOnTask($userId, $courseId, 30);
 
         // AI interventions
         $interventions = $this->recommender->forInstructor($userId, $courseId);
@@ -240,12 +273,15 @@ class InstructorEngagementController extends Controller
             ],
             'engagement_score' => $finalScore,
             'risk_level'       => $riskLevel,
+            'score_breakdown'  => $this->scoreBreakdown($latestScore),
+            'confidence'       => $this->confidence($latestScore),
             'streak'           => $streak,
             'inactive_days'    => $inactiveDays,
             'score_history'    => $scoreHistory,
             'login_history'    => $loginHistory,
             'activity_log'     => $activityLog,
             'device_breakdown' => $deviceBreakdown,
+            'time_on_task'     => $timeOnTask,
             'interventions'    => $interventions,
         ]);
     }
@@ -303,13 +339,15 @@ class InstructorEngagementController extends Controller
             'pacing'              => $engScore?->pacing_score,
             'live_session'        => $engScore?->live_session_score,
         ];
+        $absentSignals = $engScore?->component_breakdown['absent'] ?? [];
         $strengths = [];
         $weakAreas = [];
         foreach ($subScores as $key => $val) {
-            if ($val === null) continue;
+            if ($val === null || in_array($key, $absentSignals, true)) continue;
             $label = ucwords(str_replace('_', ' ', $key));
-            if ($val >= 0.7) $strengths[] = $label;
-            if ($val <  0.4) $weakAreas[]  = $label;
+            // Component scores are 0-100.
+            if ($val >= 70) $strengths[] = $label;
+            if ($val <  40) $weakAreas[]  = $label;
         }
         if ($prevScore && ($prevScore->engagement_score - $engVal) >= 15) {
             $weakAreas[] = 'Engagement dropped ' . round($prevScore->engagement_score - $engVal) . ' pts week-over-week';
@@ -361,11 +399,11 @@ class InstructorEngagementController extends Controller
             'support_notes'       => $student->support_notes,
             'strengths'           => $strengths,
             'weak_areas'          => $weakAreas,
-            'login_consistency'   => $engScore ? round(($engScore->login_consistency_score ?? 0) * 100) . '%' : 'N/A',
-            'content_completion'  => $engScore ? round(($engScore->content_completion_score ?? 0) * 100) . '%' : 'N/A',
-            'assessment_activity' => $engScore ? round(($engScore->assessment_activity_score ?? 0) * 100) . '%' : 'N/A',
-            'forum_participation' => $engScore ? round(($engScore->forum_participation_score ?? 0) * 100) . '%' : 'N/A',
-            'live_session_score'  => $engScore ? round(($engScore->live_session_score ?? 0) * 100) . '%' : 'N/A',
+            'login_consistency'   => $engScore ? round($engScore->login_consistency_score ?? 0) . '%' : 'N/A',
+            'content_completion'  => $engScore ? round($engScore->content_completion_score ?? 0) . '%' : 'N/A',
+            'assessment_activity' => $engScore ? round($engScore->assessment_activity_score ?? 0) . '%' : 'N/A',
+            'forum_participation' => in_array('forum_participation', $absentSignals, true) ? 'N/A' : ($engScore ? round($engScore->forum_participation_score ?? 0) . '%' : 'N/A'),
+            'live_session_score'  => in_array('live_session', $absentSignals, true) ? 'N/A' : ($engScore ? round($engScore->live_session_score ?? 0) . '%' : 'N/A'),
             'bounce_sessions'     => $behavioral?->bounce_session_count ?? 0,
             'avg_session_minutes' => $behavioral?->avg_session_duration_minutes
                 ? round($behavioral->avg_session_duration_minutes, 1) : 'N/A',
@@ -422,12 +460,22 @@ class InstructorEngagementController extends Controller
             $reasons[] = 'No engagement data recorded';
             return $reasons;
         }
-        if ($inactiveDays !== null && $inactiveDays >= 5) $reasons[] = "Inactive for {$inactiveDays} days";
-        if (($score->login_consistency_score  ?? 1) < 0.4) $reasons[] = 'Low login consistency';
-        if (($score->content_completion_score ?? 1) < 0.5) $reasons[] = 'Low content completion';
-        if (($score->assessment_activity_score?? 1) < 0.3) $reasons[] = 'Very low assessment activity';
-        if (($score->forum_participation_score ?? 1) == 0)  $reasons[] = 'Zero forum participation';
-        if (($score->live_session_score        ?? 1) == 0)  $reasons[] = 'No live session attendance';
+
+        // Component scores are stored on a 0-100 scale. Only flag a signal that
+        // was actually measured (absent signals carry a placeholder 0).
+        $absent = $score->component_breakdown['absent'] ?? [];
+        $warn   = (int) config('engagement.inactivity_warn', 5);
+
+        if ($inactiveDays !== null && $inactiveDays >= $warn) $reasons[] = "Inactive for {$inactiveDays} days";
+        if (($score->login_consistency_score   ?? 100) < 40) $reasons[] = 'Low login consistency';
+        if (($score->content_completion_score  ?? 100) < 50) $reasons[] = 'Low content completion';
+        if (($score->assessment_activity_score ?? 100) < 30) $reasons[] = 'Very low assessment activity';
+        if (!in_array('forum_participation', $absent, true) && ($score->forum_participation_score ?? 100) == 0) {
+            $reasons[] = 'Zero forum participation';
+        }
+        if (!in_array('live_session', $absent, true) && ($score->live_session_score ?? 100) == 0) {
+            $reasons[] = 'No live session attendance';
+        }
         return $reasons;
     }
 }

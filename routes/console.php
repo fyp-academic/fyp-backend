@@ -22,3 +22,8 @@ Schedule::command('attendance:update-statuses')->everyMinute();
 
 // Weekly full profile refresh — catches passive learners who never trigger events
 Schedule::command('profiles:recalculate-all')->weekly()->sundays()->at('02:00');
+
+// Hourly engagement recompute — keeps instructor scores fresh from measured
+// telemetry (also closes abandoned login sessions). Manual on-demand compute
+// via POST /courses/{id}/learners/{uid}/engagement/compute still works.
+Schedule::command('engagement:recompute')->hourly()->withoutOverlapping();

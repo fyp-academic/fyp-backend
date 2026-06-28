@@ -39,11 +39,11 @@ class LearnerLoginSession extends Model
         return $this->hasMany(LearnerActivityEvent::class, 'login_session_id');
     }
 
-    public function close(): void
+    public function close(?\DateTimeInterface $endedAt = null): void
     {
-        $this->ended_at         = now();
-        $this->duration_seconds = (int) $this->started_at->diffInSeconds(now());
-        $this->is_bounce        = $this->duration_seconds < 120;
+        $this->ended_at         = $endedAt ?? now();
+        $this->duration_seconds = (int) $this->started_at->diffInSeconds($this->ended_at);
+        $this->is_bounce        = $this->duration_seconds < (int) config('engagement.bounce_seconds', 120);
         $this->save();
     }
 }
