@@ -85,7 +85,7 @@ class AiQuizController extends Controller
             'message'           => 'Quiz published successfully.',
             'activity_id'       => $activity->id,
             'activity_name'     => $activity->name,
-            'question_count'    => $activity->questions->count(),
+            'question_count'    => $activity->quizQuestions->count(),
             'visible'           => $activity->visible,
         ], 201);
     }

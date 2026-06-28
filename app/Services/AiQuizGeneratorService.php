@@ -150,7 +150,7 @@ class AiQuizGeneratorService
             }
         }
 
-        $activity->load('questions.answers');
+        $activity->load('quizQuestions.answers');
         return $activity;
     }
 
