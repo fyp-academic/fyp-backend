@@ -107,7 +107,7 @@ class AiQuizGeneratorService
                 'type'              => 'quiz',
                 'name'              => $activityName,
                 'description'       => $description,
-                'visible'           => false,
+                'visible'           => true,
                 'completion_status' => 'none',
                 'grade_max'         => $gradeMax,
                 'sort_order'        => $maxOrder + 1,
