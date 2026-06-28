@@ -11,6 +11,7 @@ use App\Models\QuizQuestion;
 use App\Models\QuizAnswer;
 use App\Models\QuizAttempt;
 use App\Models\QuizAttemptResponse;
+use App\Services\ActivityResultService;
 use App\Models\Course;
 use App\Models\CognitiveSignal;
 use App\Jobs\RecalculateProfileJob;
@@ -564,6 +565,20 @@ class QuizController extends Controller
         $attempt->needs_grading = $needsManualGrading;
         $attempt->score_percentage = $percentage;
 
+        // Mirror the score into the course gradebook (GradeItem/StudentGrade) so the
+        // quiz shows in the instructor Grades tab. Only when fully auto-graded;
+        // essay/manual quizzes are recorded once grading completes (gradeEssayResponse).
+        if (! $needsManualGrading) {
+            try {
+                $activity = Activity::find($attempt->activity_id);
+                if ($activity) {
+                    app(ActivityResultService::class)->recordScore($activity, $user->id, (float) $totalScore, (float) $maxScore);
+                }
+            } catch (\Throwable $e) {
+                Log::warning('Quiz: gradebook record failed', ['attempt' => $attempt->id, 'error' => $e->getMessage()]);
+            }
+        }
+
         // Engagement: log quiz_submit event + update skip_rate in cognitive signals
         try {
             $totalQuestions  = QuizQuestion::where('activity_id', $attempt->activity_id)->count();
@@ -776,6 +791,16 @@ class QuizController extends Controller
                     'status' => 'submitted',
                     'score'  => $totalScore,
                 ]);
+
+                // Now fully graded — mirror into the course gradebook for the instructor.
+                try {
+                    $activity = Activity::find($attempt->activity_id);
+                    if ($activity) {
+                        app(ActivityResultService::class)->recordScore($activity, $attempt->student_id, (float) $totalScore, (float) $attempt->max_score);
+                    }
+                } catch (\Throwable $e) {
+                    Log::warning('Quiz: gradebook record failed (essay)', ['attempt' => $attempt->id, 'error' => $e->getMessage()]);
+                }
             }
 
             Log::info('Essay response graded', [
