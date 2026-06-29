@@ -61,9 +61,11 @@ class PracticalController extends Controller
 
     /**
      * GET /api/v1/activities/{id}/practical-submission  (student)
-     * The current student's own draft/submission for this activity. When the
-     * activity is timed, the first access lazily records `started_at` (the
-     * authoritative clock start) so the countdown can't be reset by refreshing.
+     * The current student's own draft/submission for this activity. Read-only:
+     * merely viewing a practical (e.g. the lesson page auto-opening it) must NOT
+     * create a row or start the clock — a timed attempt's `started_at` is anchored
+     * only by an explicit start() call. The countdown is reported only once the
+     * student has actually begun (an existing row carries `started_at`).
      */
     public function mySubmission(Request $request, string $id): JsonResponse
     {
@@ -75,22 +77,45 @@ class PracticalController extends Controller
             ->where('student_id', $user->id)
             ->first();
 
-        // Start the clock on first access for a timed activity.
-        if ($limit && ! $sub) {
-            $sub = PracticalSubmission::create([
-                'id'          => (string) Str::uuid(),
-                'activity_id' => $id,
-                'student_id'  => $user->id,
-                'course_id'   => $activity->course_id,
-                'files'       => $this->emptyFiles(),
-                'status'      => 'draft',
-                'started_at'  => now(),
-            ]);
-        }
-
         $deadline = ($limit && $sub?->started_at)
             ? $this->deadlineFromStart($sub->started_at, $limit)
             : null;
+
+        return response()->json(array_merge(
+            ['data' => $sub, 'time_limit_minutes' => $limit],
+            $this->deadlinePayload($deadline),
+        ));
+    }
+
+    /**
+     * POST /api/v1/activities/{id}/practical-start  (student)
+     * Explicit, idempotent start of a practical attempt. This is the only place
+     * that anchors the authoritative clock (`started_at`) — the first time the
+     * student chooses to begin — so passively opening the activity never starts the
+     * countdown. Refresh-safe: an existing `started_at` is preserved.
+     */
+    public function start(Request $request, string $id): JsonResponse
+    {
+        $activity = Activity::findOrFail($id);
+        $user     = $request->user();
+        $limit    = $this->resolveActivityTimeLimit($activity);
+
+        $sub = PracticalSubmission::firstOrNew([
+            'activity_id' => $id,
+            'student_id'  => $user->id,
+        ]);
+        if (! $sub->exists) {
+            $sub->id        = (string) Str::uuid();
+            $sub->course_id = $activity->course_id;
+            $sub->files     = $this->emptyFiles();
+            $sub->status    = 'draft';
+        }
+        if (! $sub->started_at) {
+            $sub->started_at = now();
+        }
+        $sub->save();
+
+        $deadline = $this->deadlineFromStart($sub->started_at, $limit);
 
         return response()->json(array_merge(
             ['data' => $sub, 'time_limit_minutes' => $limit],

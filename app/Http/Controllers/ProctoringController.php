@@ -21,6 +21,13 @@ class ProctoringController extends Controller
 {
     private const AUTO_SUBMIT_THRESHOLD = 5;
 
+    /**
+     * Grace window (seconds) after a session starts during which transient webcam
+     * frames ("no face" / "looking away") are ignored — the camera is still warming
+     * up and the student is reading instructions, so these are not real violations.
+     */
+    private const WEBCAM_WARMUP_SECONDS = 20;
+
     public function __construct(private GeminiService $gemini) {}
 
     // ─────────────────────────────────────────────────────────────────────
@@ -137,6 +144,18 @@ class ProctoringController extends Controller
         $violation = $analysis['violation'] ?? null;
 
         if ($violation) {
+            // Camera warm-up grace: during the first seconds of a session the webcam is
+            // still initializing and the student is reading instructions, so transient
+            // "no face" / "looking away" frames are not real violations — don't count
+            // them toward the auto-submit threshold (which prevents a spurious force
+            // submit moments after the student clicks Start).
+            $transient = in_array($violation, ['no_face_detected', 'looking_away'], true);
+            $inWarmup  = $session->started_at
+                && now()->lt($session->started_at->copy()->addSeconds(self::WEBCAM_WARMUP_SECONDS));
+            if ($transient && $inWarmup) {
+                return response()->json(['ok' => true, 'violation' => null, 'warmup' => true]);
+            }
+
             $violationRequest = new Request([
                 'session_id' => $session->id,
                 'type'       => $violation,

@@ -658,6 +658,7 @@ Route::middleware('auth:sanctum')->post('posts/{id}/react', [ForumController::cl
 
 // Practical Problem — student submissions
 Route::middleware('auth:sanctum')->get('activities/{id}/practical-submission',  [PracticalController::class, 'mySubmission']);
+Route::middleware('auth:sanctum')->post('activities/{id}/practical-start',      [PracticalController::class, 'start']);
 Route::middleware('auth:sanctum')->post('activities/{id}/practical-submission', [PracticalController::class, 'save']);
 
 // Practical Problem — instructor review & grading
