@@ -9,6 +9,9 @@ use App\Models\LearnerActivityEvent;
 use App\Models\LearningStreak;
 use App\Models\CognitiveSignal;
 use App\Models\BehavioralSignal;
+use App\Models\Enrollment;
+use App\Models\Activity;
+use App\Models\Session;
 
 class EngagementRecommendationService
 {
@@ -69,6 +72,7 @@ class EngagementRecommendationService
                 action: 'Resume Learning',
                 metric: 'login_consistency',
                 priority: 10,
+                actionType: 'courses',
             );
         } elseif ($inactiveDays !== null && $inactiveDays >= self::INACTIVITY_WARN) {
             $recs[] = $this->card(
@@ -78,6 +82,7 @@ class EngagementRecommendationService
                 action: 'Go to My Courses',
                 metric: 'login_consistency',
                 priority: 8,
+                actionType: 'courses',
             );
         }
 
@@ -98,6 +103,60 @@ class EngagementRecommendationService
                 metric: 'streak',
                 priority: 1,
             );
+        }
+
+        // ── Upcoming deadline (closes the loop with the calendar) ──────────
+        $enrolledCourseIds = Enrollment::where('user_id', $learnerId)
+            ->where('status', 'active')
+            ->pluck('course_id');
+
+        if ($enrolledCourseIds->isNotEmpty()) {
+            $soon = now()->copy()->addDays(7);
+
+            $nextDue = Activity::whereIn('course_id', $enrolledCourseIds)
+                ->whereNotNull('due_date')
+                ->whereBetween('due_date', [now()->startOfDay(), $soon])
+                ->orderBy('due_date')
+                ->first(['id', 'name', 'due_date', 'course_id']);
+
+            $nextSession = Session::whereIn('course_id', $enrolledCourseIds)
+                ->where('status', '!=', 'ended')
+                ->whereNotNull('scheduled_at')
+                ->whereBetween('scheduled_at', [now(), $soon])
+                ->orderBy('scheduled_at')
+                ->first(['id', 'title', 'scheduled_at', 'course_id']);
+
+            $dueWhen     = $nextDue ? Carbon::parse($nextDue->due_date) : null;
+            $sessionWhen = $nextSession ? Carbon::parse($nextSession->scheduled_at) : null;
+
+            // Surface whichever lands first.
+            if ($dueWhen && (!$sessionWhen || $dueWhen->lessThanOrEqualTo($sessionWhen))) {
+                $days = max(0, (int) now()->startOfDay()->diffInDays($dueWhen, false));
+                $when = $days <= 0 ? 'today' : ($days === 1 ? 'tomorrow' : "in {$days} days");
+                $recs[] = $this->card(
+                    type: 'info',
+                    title: 'Upcoming Deadline',
+                    message: "\"{$nextDue->name}\" is due {$when}. Open your calendar to plan your week and stay ahead.",
+                    metric: 'pacing',
+                    action: 'View Schedule',
+                    priority: 6,
+                    actionType: 'calendar',
+                    actionTarget: ['course_id' => $nextDue->course_id],
+                );
+            } elseif ($sessionWhen) {
+                $days = max(0, (int) now()->startOfDay()->diffInDays($sessionWhen, false));
+                $when = $days <= 0 ? 'today' : ($days === 1 ? 'tomorrow' : "in {$days} days");
+                $recs[] = $this->card(
+                    type: 'info',
+                    title: 'Live Session Coming Up',
+                    message: "\"{$nextSession->title}\" is scheduled {$when}. Add it to your plan so you don't miss the live Q&A.",
+                    metric: 'live_session',
+                    action: 'View Schedule',
+                    priority: 5,
+                    actionType: 'calendar',
+                    actionTarget: ['course_id' => $nextSession->course_id],
+                );
+            }
         }
 
         // ── Per-course score rules ────────────────────────────────────────
@@ -126,6 +185,8 @@ class EngagementRecommendationService
                     action: 'View Course',
                     metric: 'content_completion',
                     priority: 7,
+                    actionType: 'lessons',
+                    actionTarget: ['course_id' => $courseId],
                 );
             }
 
@@ -138,6 +199,8 @@ class EngagementRecommendationService
                     action: 'View Assessments',
                     metric: 'assessment_activity',
                     priority: 9,
+                    actionType: 'assessments',
+                    actionTarget: ['course_id' => $courseId],
                 );
             }
 
@@ -150,6 +213,8 @@ class EngagementRecommendationService
                     action: 'Go to Forum',
                     metric: 'forum_participation',
                     priority: 4,
+                    actionType: 'forum',
+                    actionTarget: ['course_id' => $courseId],
                 );
             }
 
@@ -162,6 +227,8 @@ class EngagementRecommendationService
                     action: 'View Schedule',
                     metric: 'pacing',
                     priority: 8,
+                    actionType: 'calendar',
+                    actionTarget: ['course_id' => $courseId],
                 );
             }
 
@@ -174,6 +241,8 @@ class EngagementRecommendationService
                     action: 'View Sessions',
                     metric: 'live_session',
                     priority: 3,
+                    actionType: 'sessions',
+                    actionTarget: ['course_id' => $courseId],
                 );
             }
 
@@ -240,6 +309,7 @@ class EngagementRecommendationService
                     action: 'Review Materials',
                     metric: 'cognitive',
                     priority: 6,
+                    actionType: 'lessons',
                 );
             }
 
@@ -368,7 +438,18 @@ class EngagementRecommendationService
         string $metric = 'general',
         ?string $action = null,
         int $priority = 5,
+        ?string $actionType = null,
+        array $actionTarget = [],
     ): array {
-        return compact('type', 'title', 'message', 'metric', 'action', 'priority');
+        return [
+            'type'          => $type,
+            'title'         => $title,
+            'message'       => $message,
+            'metric'        => $metric,
+            'action'        => $action,
+            'action_type'   => $actionType,
+            'action_target' => (object) $actionTarget,
+            'priority'      => $priority,
+        ];
     }
 }

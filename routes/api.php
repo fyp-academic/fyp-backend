@@ -38,6 +38,7 @@ use App\Http\Controllers\VideoController;
 use App\Http\Controllers\FileController;
 use App\Http\Controllers\AiTutorController;
 use App\Http\Controllers\EngagementController;
+use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\AiQuizController;
 use App\Http\Controllers\InstructorAdaptationController;
 use App\Http\Controllers\InstructorEngagementController;
@@ -774,6 +775,18 @@ Route::middleware('auth:sanctum')->prefix('polls')->group(function () {
         Route::get('my-login-history',   [EngagementController::class, 'myLoginHistory']);
         Route::get('my-activity-log',    [EngagementController::class, 'myActivityLog']);
         Route::get('my-recommendations', [EngagementController::class, 'myRecommendations']);
+    });
+
+    // =========================================================================
+    // CALENDAR / SCHEDULER  (instructor-authored events + derived feed)
+    // =========================================================================
+    Route::middleware('auth:sanctum')->prefix('calendar')->group(function () {
+        Route::get('events',         [CalendarController::class, 'index']);
+        Route::get('calendars',      [CalendarController::class, 'calendars']);
+        Route::post('events',        [CalendarController::class, 'store']);
+        Route::get('events/{id}',    [CalendarController::class, 'show']);
+        Route::put('events/{id}',    [CalendarController::class, 'update']);
+        Route::delete('events/{id}', [CalendarController::class, 'destroy']);
     });
 
     // ── Instructor engagement views ───────────────────────────────────────────
