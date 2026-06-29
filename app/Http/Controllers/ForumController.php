@@ -44,9 +44,10 @@ class ForumController extends Controller
     public function createDiscussion(Request $request, string $id): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'title'   => 'required|string|max:255',
-            'content' => 'required|string',
-            'pinned'  => 'sometimes|boolean',
+            'title'      => 'required|string|max:255',
+            'content'    => 'required_without:attachment|nullable|string',
+            'pinned'     => 'sometimes|boolean',
+            'attachment' => 'nullable|file|mimes:webm,ogg,oga,mp3,wav,m4a,aac|max:20480',
         ]);
 
         if ($validator->fails()) {
@@ -67,14 +68,14 @@ class ForumController extends Controller
             'post_count'  => 1,
         ]);
 
-        ForumPost::create([
+        ForumPost::create(array_merge([
             'id'            => Str::uuid()->toString(),
             'discussion_id' => $discussion->id,
             'user_id'       => $user->id,
             'subject'       => $request->title,
-            'content'       => $request->content,
+            'content'       => $request->input('content'),
             'depth_level'   => 0,
-        ]);
+        ], $this->attachmentColumns($request, $discussion->id)));
 
         try {
             $this->engagement->logEvent(
@@ -83,7 +84,7 @@ class ForumController extends Controller
                 courseId:     $activity->course_id,
                 resourceType: 'forum_discussion',
                 resourceId:   $discussion->id,
-                metadata:     ['depth_level' => 0, 'word_count' => str_word_count($request->content)],
+                metadata:     ['depth_level' => 0, 'word_count' => str_word_count($request->input('content') ?? '')],
                 loginSessionId: $request->input('login_session_id'),
             );
         } catch (\Throwable $e) {
@@ -117,8 +118,9 @@ class ForumController extends Controller
     public function reply(Request $request, string $id): JsonResponse
     {
         $validator = Validator::make($request->all(), [
-            'content'   => 'required|string',
-            'parent_id' => 'sometimes|nullable|string|exists:forum_posts,id',
+            'content'    => 'required_without:attachment|nullable|string',
+            'parent_id'  => 'sometimes|nullable|string|exists:forum_posts,id',
+            'attachment' => 'nullable|file|mimes:webm,ogg,oga,mp3,wav,m4a,aac|max:20480',
         ]);
 
         if ($validator->fails()) {
@@ -147,15 +149,15 @@ class ForumController extends Controller
             ? true
             : ($anonMode === 'partial' ? (bool) $request->input('anonymous', false) : false);
 
-        $post = ForumPost::create([
+        $post = ForumPost::create(array_merge([
             'id'            => Str::uuid()->toString(),
             'discussion_id' => $id,
             'user_id'       => $request->user()->id,
             'parent_id'     => $parentId,
-            'content'       => $request->content,
+            'content'       => $request->input('content'),
             'depth_level'   => $depthLevel,
             'anonymous'     => $anonymous,
-        ]);
+        ], $this->attachmentColumns($request, $id)));
 
         $discussion->increment('post_count');
 
@@ -166,7 +168,7 @@ class ForumController extends Controller
                 courseId:     $discussion->course_id,
                 resourceType: 'forum_discussion',
                 resourceId:   $id,
-                metadata:     ['post_id' => $post->id, 'depth_level' => $depthLevel, 'word_count' => str_word_count($request->content)],
+                metadata:     ['post_id' => $post->id, 'depth_level' => $depthLevel, 'word_count' => str_word_count($request->input('content') ?? '')],
                 loginSessionId: $request->input('login_session_id'),
             );
         } catch (\Throwable $e) {
@@ -382,11 +384,33 @@ class ForumController extends Controller
             'likes_count'    => (int) $post->likes_count,
             'dislikes_count' => (int) $post->dislikes_count,
             'my_reaction'    => (int) (($reactionMap['mine'] ?? [])[$post->id] ?? 0),
+            'attachment_path' => $post->attachment_path,
+            'attachment_type' => $post->attachment_type,
+            'attachment_name' => $post->attachment_name,
             'anonymous'      => $anonymous,
             'author'         => $anonymous
                 ? ['id' => null, 'name' => 'Anonymous', 'avatar' => null]
                 : ['id' => $post->user?->id, 'name' => $post->user?->name, 'avatar' => $this->avatarUrl($post->user)],
             'is_mine'        => $userId !== null && $post->user_id === $userId,
+        ];
+    }
+
+    /**
+     * Store an optional uploaded attachment (e.g. a voice note) for a forum post,
+     * mirroring MessageController::store(). Returns the four attachment_* columns
+     * (all null when no file is present), stored on the public disk under forum/{id}.
+     */
+    private function attachmentColumns(Request $request, string $discussionId): array
+    {
+        if (! $request->hasFile('attachment')) {
+            return ['attachment_path' => null, 'attachment_name' => null, 'attachment_type' => null, 'attachment_size' => null];
+        }
+        $file = $request->file('attachment');
+        return [
+            'attachment_path' => $file->store("forum/{$discussionId}", 'public'),
+            'attachment_name' => $file->getClientOriginalName(),
+            'attachment_type' => $file->getMimeType(),
+            'attachment_size' => $file->getSize(),
         ];
     }
 

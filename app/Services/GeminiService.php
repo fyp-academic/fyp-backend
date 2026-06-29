@@ -144,6 +144,105 @@ Start your response with [ and end with ]';
     }
 
     // ═══════════════════════════════════════════════════════════════
+    //  INSTRUCTOR AI INSIGHTS — recommendations & suggestions
+    //  (grounded in measured course performance; quota-friendly JSON)
+    // ═══════════════════════════════════════════════════════════════
+
+    /**
+     * Content/resource recommendations targeting a cohort's measured weaknesses.
+     *
+     * @return list<array<string,mixed>>  [{title, content_type, source, url, relevance_score}]
+     */
+    public function generateInstructorContentRecommendations(string $contextSummary, string $courseName): array
+    {
+        $system = 'You are an instructional-design assistant for a university LMS. '
+            . 'Recommend concrete learning resources that address the measured weaknesses described. '
+            . 'Return ONLY a valid JSON array — no markdown, no backticks, no commentary.';
+
+        $prompt = <<<PROMPT
+Course: {$courseName}
+
+Measured performance signals:
+{$contextSummary}
+
+Recommend 4-6 learning resources (videos, articles, exercises, or internal review activities) that would most help this cohort improve on the WEAK areas above. Prefer reputable, well-known sources.
+
+Return a JSON array where each item is exactly:
+{"title": "<resource title>", "content_type": "video|article|exercise|quiz", "source": "<provider/site name or 'Internal'>", "url": "<https url or empty string>", "relevance_score": <integer 0-100, how directly it targets a measured weakness>}
+
+Order by relevance_score descending. Return ONLY the JSON array.
+PROMPT;
+
+        $raw = $this->generate($prompt, $system, [
+            'temperature'     => 0.5,
+            'max_tokens'      => 1536,
+            'thinking_budget' => 0,
+        ]);
+
+        return $this->decodeJsonArray($raw);
+    }
+
+    /**
+     * Actionable pedagogical suggestions for the instructor, justified by the data.
+     *
+     * @return list<array<string,mixed>>  [{title, description, impact_level}]
+     */
+    public function generateInstructorSuggestions(string $contextSummary, string $courseName): array
+    {
+        $system = 'You are a pedagogy coach for a university instructor. '
+            . 'Give specific, actionable teaching suggestions grounded in the measured data. '
+            . 'Return ONLY a valid JSON array — no markdown, no backticks, no commentary.';
+
+        $prompt = <<<PROMPT
+Course: {$courseName}
+
+Measured performance signals:
+{$contextSummary}
+
+Provide 3-5 actionable suggestions for the INSTRUCTOR to improve learning outcomes and engagement. Each suggestion must be directly justified by a signal above.
+
+Return a JSON array where each item is exactly:
+{"title": "<short action title>", "description": "<1-2 sentence concrete action>", "impact_level": "low|medium|high"}
+
+Return ONLY the JSON array.
+PROMPT;
+
+        $raw = $this->generate($prompt, $system, [
+            'temperature'     => 0.5,
+            'max_tokens'      => 1024,
+            'thinking_budget' => 0,
+        ]);
+
+        return $this->decodeJsonArray($raw);
+    }
+
+    /**
+     * Tolerantly decode a JSON array from a model response that may be wrapped in
+     * fences or an envelope object ({"items": [...]}). Returns [] on failure.
+     *
+     * @return list<array<string,mixed>>
+     */
+    private function decodeJsonArray(string $raw): array
+    {
+        $clean  = preg_replace('/```json|```/', '', $raw) ?? $raw;
+        $parsed = json_decode(trim($clean), true);
+
+        if (! is_array($parsed)) {
+            return [];
+        }
+        if (array_is_list($parsed)) {
+            return array_values(array_filter($parsed, 'is_array'));
+        }
+        // Envelope object — return the first list-valued property.
+        foreach ($parsed as $value) {
+            if (is_array($value) && array_is_list($value)) {
+                return array_values(array_filter($value, 'is_array'));
+            }
+        }
+        return [];
+    }
+
+    // ═══════════════════════════════════════════════════════════════
     //  AI TUTOR WIDGET — Specialised generation methods
     // ═══════════════════════════════════════════════════════════════
 
@@ -612,6 +711,16 @@ CRITICAL WRITING RULES — violating any of these will make the message useless:
                 'maxOutputTokens' => $options['max_tokens'] ?? 2048,
             ],
         ];
+
+        // gemini-2.5-* are reasoning models whose "thinking" tokens count against
+        // maxOutputTokens — left uncapped they can consume the whole budget and
+        // truncate the real answer. Callers that need deterministic JSON/text pass
+        // thinking_budget=0 to disable thinking. (See project memory.)
+        if (array_key_exists('thinking_budget', $options)) {
+            $payload['generationConfig']['thinkingConfig'] = [
+                'thinkingBudget' => (int) $options['thinking_budget'],
+            ];
+        }
 
         // Add system instruction if provided
         if (!empty($system)) {

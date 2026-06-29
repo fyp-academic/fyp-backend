@@ -21,6 +21,8 @@ class AiQuizController extends Controller
     {
         $request->validate([
             'section_id'     => 'required|string|exists:sections,id',
+            'activity_id'    => 'sometimes|nullable|string|exists:activities,id',
+            'topic'          => 'sometimes|nullable|string|max:255',
             'question_count' => 'sometimes|integer|min:1|max:20',
             'question_types' => 'sometimes|array',
             'question_types.*' => 'string|in:multiple_choice,true_false,short_answer',
@@ -33,6 +35,8 @@ class AiQuizController extends Controller
             questionCount: (int) $request->input('question_count', 5),
             questionTypes: $request->input('question_types', ['multiple_choice']),
             difficulty:    $request->input('difficulty', 'medium'),
+            activityId:    $request->input('activity_id'),
+            topic:         $request->input('topic'),
         );
 
         if (empty($result['questions'])) {
@@ -63,6 +67,9 @@ class AiQuizController extends Controller
             'activity_name'        => 'required|string|max:255',
             'description'          => 'sometimes|nullable|string',
             'grade_max'            => 'sometimes|numeric|min:0',
+            'due_date'             => 'sometimes|nullable|date',
+            'visible'              => 'sometimes|boolean',
+            'settings'             => 'sometimes|nullable|array',
             'existing_activity_id' => 'sometimes|nullable|string|exists:activities,id',
             'questions'            => 'required|array|min:1',
             'questions.*.type'     => 'required|string|in:multiple_choice,true_false,short_answer',
@@ -79,6 +86,9 @@ class AiQuizController extends Controller
             existingActivityId: $request->input('existing_activity_id'),
             gradeMax:           (float) $request->input('grade_max', 10),
             description:        $request->input('description'),
+            settings:           $request->input('settings'),
+            dueDate:            $request->input('due_date'),
+            visible:            $request->boolean('visible', true),
         );
 
         return response()->json([

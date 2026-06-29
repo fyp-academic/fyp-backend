@@ -30,12 +30,14 @@ class AiQuizGeneratorService
         int $questionCount,
         array $questionTypes,
         string $difficulty,
+        ?string $activityId = null,
+        ?string $topic = null,
     ): array {
         $questionCount = max(1, min(20, $questionCount));
         $questionTypes = array_values(array_intersect($questionTypes, self::ALLOWED_TYPES))
             ?: ['multiple_choice'];
 
-        [$sourceText, $sectionTitle, $courseTitle] = $this->gatherSourceMaterial($courseId, $sectionId);
+        [$sourceText, $sectionTitle, $courseTitle] = $this->gatherSourceMaterial($courseId, $sectionId, $activityId);
 
         $apiKey  = (string) (config('services.gemini.api_key') ?? '');
         $model   = (string) (config('services.gemini.model') ?? 'gemini-2.5-flash');
@@ -47,7 +49,7 @@ class AiQuizGeneratorService
 
         $prompt = $this->buildPrompt(
             $courseTitle, $sectionTitle, $sourceText,
-            $questionCount, $questionTypes, $difficulty,
+            $questionCount, $questionTypes, $difficulty, $topic,
         );
 
         try {
@@ -55,7 +57,13 @@ class AiQuizGeneratorService
                 ->withHeaders(['Content-Type' => 'application/json'])
                 ->post("{$baseUrl}/models/{$model}:generateContent?key={$apiKey}", [
                     'contents'         => [['role' => 'user', 'parts' => [['text' => $prompt]]]],
-                    'generationConfig' => ['temperature' => 0.4, 'maxOutputTokens' => 4096],
+                    'generationConfig' => [
+                        'temperature'     => 0.4,
+                        'maxOutputTokens' => 4096,
+                        // Disable reasoning tokens so they don't eat the output budget
+                        // and truncate the JSON (gemini-2.5-* thinking-token bug).
+                        'thinkingConfig'  => ['thinkingBudget' => 0],
+                    ],
                     'systemInstruction'=> ['parts' => [['text' => 'You are an expert instructional designer. Return valid JSON only — no markdown fences, no preamble.']]],
                 ]);
 
@@ -93,11 +101,23 @@ class AiQuizGeneratorService
         ?string $existingActivityId,
         float $gradeMax,
         ?string $description,
+        ?array $settings = null,
+        ?string $dueDate = null,
+        bool $visible = true,
     ): Activity {
         $section = Section::findOrFail($sectionId);
 
         if ($existingActivityId) {
             $activity = Activity::findOrFail($existingActivityId);
+            $activity->fill(array_filter([
+                'name'        => $activityName,
+                'description' => $description,
+                'grade_max'   => $gradeMax,
+                'due_date'    => $dueDate,
+                'settings'    => $settings,
+            ], fn ($v) => $v !== null));
+            $activity->visible = $visible;
+            $activity->save();
         } else {
             $maxOrder = Activity::where('section_id', $sectionId)->max('sort_order') ?? -1;
             $activity = Activity::create([
@@ -107,9 +127,11 @@ class AiQuizGeneratorService
                 'type'              => 'quiz',
                 'name'              => $activityName,
                 'description'       => $description,
-                'visible'           => true,
+                'visible'           => $visible,
                 'completion_status' => 'none',
                 'grade_max'         => $gradeMax,
+                'due_date'          => $dueDate,
+                'settings'          => $settings,
                 'sort_order'        => $maxOrder + 1,
             ]);
         }
@@ -162,7 +184,7 @@ class AiQuizGeneratorService
     // ── Private helpers ────────────────────────────────────────────────────────
 
     /** @return array{0: string, 1: string, 2: string} [text, sectionTitle, courseTitle] */
-    private function gatherSourceMaterial(string $courseId, string $sectionId): array
+    private function gatherSourceMaterial(string $courseId, string $sectionId, ?string $activityId = null): array
     {
         $section = Section::find($sectionId);
         $sectionTitle = $section?->title ?? 'Section';
@@ -170,10 +192,12 @@ class AiQuizGeneratorService
 
         $courseTitle = (string) (DB::table('courses')->where('id', $courseId)->value('name') ?? '');
 
-        // Gather lesson-page content chunks from activities in this section
+        // Gather lesson-page content. When a specific lesson (activityId) is given,
+        // narrow the source to just that topic; otherwise use the whole section.
         $activityIds = DB::table('activities')
             ->where('section_id', $sectionId)
             ->where('type', 'lesson')
+            ->when($activityId, fn ($q) => $q->where('id', $activityId))
             ->pluck('id');
 
         $pageIds = DB::table('lesson_pages')
@@ -232,6 +256,7 @@ class AiQuizGeneratorService
         int $questionCount,
         array $questionTypes,
         string $difficulty,
+        ?string $topic = null,
     ): string {
         $typesStr = implode(', ', $questionTypes);
         $bloomMap = match ($difficulty) {
@@ -239,6 +264,10 @@ class AiQuizGeneratorService
             'hard'  => 'analyze and evaluate',
             default => 'understand and apply',
         };
+
+        $focusLine = ($topic !== null && trim($topic) !== '')
+            ? "FOCUS TOPIC: {$topic} — prioritise questions about this specific topic within the section.\n"
+            : '';
 
         $typeInstructions = '';
         if (in_array('multiple_choice', $questionTypes, true)) {
@@ -256,7 +285,7 @@ Generate exactly {$questionCount} quiz questions for the following course sectio
 
 COURSE: {$courseTitle}
 SECTION: {$sectionTitle}
-DIFFICULTY: {$difficulty} (target Bloom's levels: {$bloomMap})
+{$focusLine}DIFFICULTY: {$difficulty} (target Bloom's levels: {$bloomMap})
 QUESTION TYPES ALLOWED: {$typesStr}
 {$typeInstructions}
 

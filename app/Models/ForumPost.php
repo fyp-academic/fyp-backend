@@ -13,7 +13,8 @@ class ForumPost extends Model
 
     protected $fillable = [
         'id', 'discussion_id', 'user_id', 'parent_id',
-        'subject', 'content', 'attachment_path',
+        'subject', 'content',
+        'attachment_path', 'attachment_name', 'attachment_type', 'attachment_size',
         'likes_count', 'dislikes_count', 'anonymous', 'quality_score', 'sentiment', 'depth_level',
     ];
 
