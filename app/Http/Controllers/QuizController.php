@@ -15,6 +15,7 @@ use App\Services\ActivityResultService;
 use App\Models\Course;
 use App\Models\CognitiveSignal;
 use App\Jobs\RecalculateProfileJob;
+use App\Constants\NotificationTypes;
 use App\Services\NotificationService;
 use App\Services\EngagementComputationService;
 use App\Services\QuestionTypes\QuestionTypeHandlerFactory;
@@ -622,13 +623,12 @@ class QuizController extends Controller
             $course = Course::findOrFail($activity->course_id);
             $instructorId = $course->instructor_id;
 
-            $this->notificationService->sendToUser(
+            $this->notificationService->dispatch(
+                NotificationTypes::NEW_SUBMISSION,
                 $instructorId,
-                'new_submission',
-                'in_app',
-                'New Quiz Submission',
-                "A student has submitted a quiz attempt for '{$activity->name}'.",
                 [
+                    'title' => 'New Quiz Submission',
+                    'body' => "A student has submitted a quiz attempt for '{$activity->name}'.",
                     'activity_id' => $activity->id,
                     'activity_type' => 'quiz',
                     'attempt_id' => $attempt->id,

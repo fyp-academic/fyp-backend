@@ -30,6 +30,15 @@ class NotificationService
         ?string $contextId = null
     ): ?Notification {
         try {
+            // Respect the user's global mute setting
+            if ($this->isGloballyMuted($userId)) {
+                Log::info('Notification skipped - user globally muted', [
+                    'type' => $type,
+                    'user_id' => $userId,
+                ]);
+                return null;
+            }
+
             // Generate dedup key
             $dedupKey = $this->generateDedupKey($type, $userId, $contextId);
 
@@ -73,14 +82,30 @@ class NotificationService
                 ]);
                 $notifications[] = $notification;
 
-                // If digest mode, add to digest instead of immediate queue
+                // Hybrid delivery:
+                //  - Batched (daily/weekly) channels are collected into a digest.
+                //  - Push/SMS inside quiet hours are deferred to the real queue so
+                //    they fire once quiet hours end (handled by SendNotificationJob).
+                //  - Every other "instant" channel (email, push, in_app) is delivered
+                //    synchronously via dispatchSync, so it works even when no queue
+                //    worker is running. The job logic (preference re-check, quiet
+                //    hours, adapter send, retries/dead-letter) is reused as-is.
                 if ($pref->shouldBatch()) {
                     $this->addToDigest($notification, $pref);
+                } elseif (in_array($pref->channel, ['push', 'sms'], true) && $pref->isInQuietHours()) {
+                    SendNotificationJob::dispatch($notification)->onQueue('notifications');
                 } else {
-                    // Dispatch to queue with exponential backoff
-                    SendNotificationJob::dispatch($notification)
-                        ->onQueue('notifications')
-                        ->attempts(3);
+                    // Synchronous delivery must never break the originating request.
+                    try {
+                        SendNotificationJob::dispatchSync($notification);
+                    } catch (\Throwable $e) {
+                        Log::error('Synchronous notification delivery failed', [
+                            'notification_id' => $notification->id,
+                            'channel' => $pref->channel,
+                            'error' => $e->getMessage(),
+                        ]);
+                        $notification->markAsFailed($e->getMessage());
+                    }
                 }
             }
 
@@ -272,6 +297,11 @@ class NotificationService
         array $payload = [],
         ?string $contextId = null
     ): ?Notification {
+        // Respect the user's global mute setting
+        if ($this->isGloballyMuted($userId)) {
+            return null;
+        }
+
         // Check if user has this type enabled for the channel; create default if missing
         $pref = NotificationPreference::where([
             'user_id' => $userId,

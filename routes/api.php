@@ -399,6 +399,11 @@ Route::prefix('v1')->group(function () {
 
             // Global mute
             Route::post('mute',                 [NotificationController::class, 'setGlobalMute']);
+
+            // Web Push (VAPID) subscription API
+            Route::get('vapid-public-key',      [NotificationController::class, 'vapidPublicKey']);
+            Route::post('push/subscribe',       [NotificationController::class, 'subscribePush']);
+            Route::post('push/unsubscribe',     [NotificationController::class, 'unsubscribePush']);
         });
 
         // ─────────────────────────────────────────────────────────────────────

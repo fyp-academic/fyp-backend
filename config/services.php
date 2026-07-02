@@ -106,4 +106,21 @@ return [
         'api_key' => env('YOUTUBE_API_KEY', ''),
     ],
 
+    /*
+    |--------------------------------------------------------------------------
+    | Web Push (VAPID)
+    |--------------------------------------------------------------------------
+    |
+    | Keys used to authenticate Web Push messages with browser push services.
+    | Generate a key pair once with:  php artisan webpush:vapid
+    | The public key is also exposed to the frontend so it can subscribe.
+    |
+    */
+    'webpush' => [
+        'public_key' => env('VAPID_PUBLIC_KEY', ''),
+        'private_key' => env('VAPID_PRIVATE_KEY', ''),
+        // mailto: or https: identifier required by the Web Push spec.
+        'subject' => env('VAPID_SUBJECT', env('MAIL_FROM_ADDRESS') ? 'mailto:' . env('MAIL_FROM_ADDRESS') : env('APP_URL', 'https://localhost')),
+    ],
+
 ];

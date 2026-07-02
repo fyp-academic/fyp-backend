@@ -13,6 +13,7 @@ use App\Models\Enrollment;
 use App\Models\UserActivityCompletion;
 use App\Models\Notification;
 use App\Jobs\RecalculateProfileJob;
+use App\Constants\NotificationTypes;
 use App\Services\NotificationService;
 use App\Services\EngagementComputationService;
 use App\Traits\TimeEnforcementHelper;
@@ -178,13 +179,19 @@ class ActivityController extends Controller
             ->toArray();
 
         foreach ($enrolledStudents as $studentId) {
-            $this->notificationService->sendToUser(
+            // Preference-aware fan-out: delivers on every channel the student has
+            // enabled for this type (in-app/email/push) instead of in-app only.
+            $this->notificationService->dispatch(
+                NotificationTypes::NEW_COURSE_MATERIAL,
                 $studentId,
-                'course_update',
-                'in_app',
-                'New ' . ucfirst($request->type) . ' Added',
-                "A new {$request->type} '{$request->name}' has been added to your course.",
-                ['course_id' => $section->course_id, 'activity_id' => $activity->id, 'activity_type' => $request->type]
+                [
+                    'title' => 'New ' . ucfirst($request->type) . ' Added',
+                    'body' => "A new {$request->type} '{$request->name}' has been added to your course.",
+                    'course_id' => $section->course_id,
+                    'activity_id' => $activity->id,
+                    'activity_type' => $request->type,
+                ],
+                $activity->id
             );
         }
 

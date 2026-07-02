@@ -12,6 +12,9 @@ class UserDevice extends Model
         'device_name',
         'device_type',
         'push_token',
+        'endpoint',
+        'public_key',
+        'auth_token',
         'platform',
         'last_used_at',
     ];

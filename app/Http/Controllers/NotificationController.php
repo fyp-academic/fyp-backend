@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Validation\ValidationException;
 use App\Models\Notification;
 use App\Models\NotificationPreference;
+use App\Models\UserDevice;
 use App\Services\NotificationService;
 
 class NotificationController extends Controller
@@ -430,6 +431,87 @@ class NotificationController extends Controller
         return response()->json([
             'unread_count' => $count,
         ]);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // WEB PUSH SUBSCRIPTION API
+    // ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * GET /api/v1/notifications/vapid-public-key
+     * Return the VAPID public key the browser needs to subscribe to push.
+     */
+    public function vapidPublicKey(): JsonResponse
+    {
+        $key = config('services.webpush.public_key');
+
+        if (empty($key)) {
+            return response()->json([
+                'message' => 'Web push is not configured on the server.',
+            ], 503);
+        }
+
+        return response()->json(['public_key' => $key]);
+    }
+
+    /**
+     * POST /api/v1/notifications/push/subscribe
+     * Register (or refresh) a browser PushSubscription for the current user.
+     */
+    public function subscribePush(Request $request): JsonResponse
+    {
+        try {
+            $validated = $request->validate([
+                'endpoint' => 'required|string',
+                'keys.p256dh' => 'required|string',
+                'keys.auth' => 'required|string',
+                'device_name' => 'nullable|string|max:255',
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json(['errors' => $e->errors()], 422);
+        }
+
+        $userId = $request->user()->id;
+
+        // Keyed by endpoint so re-subscribing the same browser updates in place.
+        $device = UserDevice::updateOrCreate(
+            ['endpoint' => $validated['endpoint']],
+            [
+                'user_id' => $userId,
+                'public_key' => $validated['keys']['p256dh'],
+                'auth_token' => $validated['keys']['auth'],
+                'platform' => 'web',
+                'device_type' => 'desktop',
+                'device_name' => $validated['device_name'] ?? $request->userAgent(),
+                'last_used_at' => now(),
+            ]
+        );
+
+        return response()->json([
+            'message' => 'Push subscription registered.',
+            'device_id' => $device->id,
+        ], 201);
+    }
+
+    /**
+     * POST /api/v1/notifications/push/unsubscribe
+     * Remove a browser PushSubscription for the current user.
+     */
+    public function unsubscribePush(Request $request): JsonResponse
+    {
+        try {
+            $validated = $request->validate([
+                'endpoint' => 'required|string',
+            ]);
+        } catch (ValidationException $e) {
+            return response()->json(['errors' => $e->errors()], 422);
+        }
+
+        UserDevice::where('user_id', $request->user()->id)
+            ->where('endpoint', $validated['endpoint'])
+            ->delete();
+
+        return response()->json(['message' => 'Push subscription removed.']);
     }
 
     // ─────────────────────────────────────────────────────────────────────
